@@ -608,7 +608,7 @@ fn injection_script_installs_dream_skin_from_backend_settings() {
     assert!(script.contains("codex-dream-skin-companion"));
     assert!(script.contains("removeDreamSkinCompanion"));
     if cfg!(windows) {
-        assert!(script.contains(":root[data-dream-skin=\"active\"]"));
+        assert!(script.contains(":root[data-dream-skin=\\\"active\\\"]"));
         assert!(!script.contains("薛凯琪专属定制皮肤"));
     }
     assert!(script.contains(".group\\\\/home-suggestions"));
