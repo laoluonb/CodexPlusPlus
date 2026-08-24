@@ -329,15 +329,19 @@ fn relay_preview_deduplicates_root_keys_when_merging_common_config() {
 }
 
 #[test]
-fn provider_presets_include_runapi() {
+fn provider_presets_exclude_promotional_relays() {
     let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let presets = manifest_dir.parent().unwrap().join("src/presets.ts");
     let presets = std::fs::read_to_string(&presets).expect("read manager presets.ts");
 
-    assert!(presets.contains("id: \"runapi\""));
-    assert!(presets.contains("name: \"RunAPI\""));
-    assert!(presets.contains("category: \"aggregator\""));
-    assert!(presets.contains("baseUrl: \"https://runapi.host/v1\""));
+    for removed_preset in ["jojocode", "jojocode-max", "runapi", "apikeyfun"] {
+        assert!(
+            !presets.contains(&format!("id: \"{removed_preset}\"")),
+            "promotional preset {removed_preset} should be absent"
+        );
+    }
+    assert!(!presets.contains("cloud.siliconflow.cn/i/"));
+    assert!(presets.contains("apiKeyUrl: \"https://cloud.siliconflow.cn\""));
 }
 
 #[test]
