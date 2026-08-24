@@ -31,19 +31,19 @@ fn bundled_target_renderers_and_styles_remain_byte_exact() {
     for (path, hash) in [
         (
             "assets/inject/upstream/dream-skin/windows/renderer-inject.js",
-            "559AE19943E3CC6C22EDAF4A316ECD6AC0DC49C492038AB16F0FAB4069EA49E6",
+            "EBB8EAB63ABF129980AD91B2103177A8E0DBA92576E96AE139E5AD8EC542ED6C",
         ),
         (
             "assets/inject/upstream/dream-skin/windows/dream-skin.css",
-            "049695F3F8FD66826F7DD0EF9363D21A5AA491C627DD9602CEAEA7383CFDD49C",
+            "AF3BD8820FF21AA8E1246375150AAEB67EA8161B99067C1787D2C7C9D8324C35",
         ),
         (
             "assets/inject/upstream/dream-skin/macos/renderer-inject.js",
-            "73DA118C964E768676C44C9ABAC910114547DDA44B6190CC3D8A6220059ABB0B",
+            "EBB8EAB63ABF129980AD91B2103177A8E0DBA92576E96AE139E5AD8EC542ED6C",
         ),
         (
             "assets/inject/upstream/dream-skin/macos/dream-skin.css",
-            "CDA12A5E08815533919A6005A803C2269637CDCAAC4D121D170230163DC9CF09",
+            "AF3BD8820FF21AA8E1246375150AAEB67EA8161B99067C1787D2C7C9D8324C35",
         ),
         (
             "assets/inject/upstream/cidala-tiger/windows/renderer-inject.js",
@@ -87,27 +87,27 @@ fn bundled_skin_pack_theme_files_remain_byte_exact() {
     for (path, hash) in [
         (
             "caishen-lite",
-            "379CB601522E7A5C2FC906E3D8BD5C7C64385FBD2A428798F8D169DEB7026F2E",
+            "CB58204AC17B5D73859193A6C7C1EE4CE33568DEE88582D5B9AC2CEB35E0B6D7",
         ),
         (
             "caishen-max",
-            "0CFF815EC9582B88ECF4AD9E7562D7DFF32904FA8F09338811397960D62FD7D4",
+            "AF1E5844A8015EC6B8AF7ABCF28D002A1A3A5AF99F95F1D492A42175F096EF84",
         ),
         (
             "caishen-readable",
-            "EB1FFD4F2F49137B4AEDDBED435513D42685C8ED9E97DF644C693FD7859CC62D",
+            "9EA843898488827C4A311644F69E2BBE8DF3C98F09E24C942EA2B68D8E98D299",
         ),
         (
             "export-night",
-            "C312329AABEE84B9A8443B08D4DB64863EC49DEEA3C7F7C942B57E4391B87B59",
+            "836738F5EF3C10142463671050D898E90F5B25C7E391FA7A4E0280C7FA391312",
         ),
         (
             "global-founder-bright",
-            "EAFB018494225ABABD83AE0E7B940E3F565232CF8F30C53AAFA63E7652178810",
+            "0816234B0BC8AE64194B7327168F9C353998FC17E4A5178B8E9BF1984B1820BB",
         ),
         (
             "mythic-guardian-noir",
-            "2A57716D0161F7405D713912BCD0CD329038657518537F3EFDB5F7EE53DBAE3D",
+            "0D984F68A0B6841E72CE062E6E56830B4FA305E6B8A1808A97A2B21E9F6F0B38",
         ),
     ] {
         assert_sha256(

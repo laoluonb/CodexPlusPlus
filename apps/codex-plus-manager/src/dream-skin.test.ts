@@ -53,7 +53,7 @@ describe("dream skin theme helpers", () => {
     assert.match(renderer, /__CODEX_PLUS_CLEAR_DREAM_SKIN__/);
   });
 
-  it("preserves target-only theme fields without rewriting them", () => {
+  it("preserves target-only theme fields while removing promotion fields", () => {
     const theme = normalizeDreamSkinTheme({
       schemaVersion: 1,
       id: "target-theme",
@@ -76,7 +76,7 @@ describe("dream skin theme helpers", () => {
         side: "right",
       },
       customTargetField: { nested: true },
-    });
+    } as Partial<ReturnType<typeof defaultDreamSkinTheme>>);
 
     assert.equal(theme.colors, undefined);
     assert.equal(theme.stylePreset, undefined);
@@ -88,6 +88,9 @@ describe("dream skin theme helpers", () => {
       side: "right",
     });
     assert.deepEqual(theme.customTargetField, { nested: true });
+    assert.equal(theme.promoTitle, undefined);
+    assert.equal(theme.promoSub, undefined);
+    assert.equal(theme.promoUrl, undefined);
   });
 
   it("renders an optional image companion beside the visible composer", async () => {
@@ -130,18 +133,18 @@ describe("dream skin theme helpers", () => {
       "utf8",
     );
 
-    assert.match(renderer, /const ensureShellMain = \(\) =>/);
-    assert.match(renderer, /main\[class\*="MainContentSurface"\]/);
-    assert.match(renderer, /data-codex-plus-dream-surface/);
-    assert.doesNotMatch(renderer, /!shellMain\s*\|\|\s*!shellSidebar/);
+    assert.match(renderer, /"key":"shell-main"/);
+    assert.match(renderer, /_MainContentSurface_/);
+    assert.match(renderer, /const resolvedMainNode = \(\) =>/);
+    assert.match(renderer, /const fallbackMainNodes = \(\) =>/);
     assert.match(compatibility, /main\[class\*="_MainContentSurface_"\]/);
     assert.match(compatibility, /shellMain\.classList\.add\("main-surface"\)/);
     assert.match(compatibility, /data-codex-plus-dream-skin-main-surface/);
     assert.match(compatibility, /clearDreamSkinMainSurfaceCompatibility\(\)/);
-    assert.match(assets, /DREAM_SKIN_RENDERER_REVISION: &str = "20-modern-main-surface"/);
+    assert.match(assets, /DREAM_SKIN_RENDERER_REVISION: &str = "21-dream-skin-1\.5\.14"/);
   });
 
-  it("extends the Windows wallpaper treatment to right and bottom dock panels", async () => {
+  it("maps current Codex surfaces through the Dream Skin selector contract", async () => {
     const renderer = await readFile(
       new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url),
       "utf8",
@@ -151,18 +154,15 @@ describe("dream skin theme helpers", () => {
       "utf8",
     );
 
-    assert.match(renderer, /\[data-app-shell-tabs="true"\]/);
-    assert.match(renderer, /dream-aux-panel-layer/);
-    assert.match(renderer, /dream-aux-panel-right/);
-    assert.match(renderer, /dream-aux-panel-bottom/);
-    assert.match(renderer, /clearAuxiliaryPanelClasses/);
-    assert.match(css, /\.dream-aux-panel-layer/);
-    assert.match(css, /\.dream-aux-panel-right/);
-    assert.match(css, /\.dream-aux-panel-bottom/);
-    assert.match(css, /\[data-codex-terminal="true"\]/);
+    assert.match(renderer, /const PART_ATTR = "data-ds-part"/);
+    assert.match(renderer, /addPart\(desired, "main"/);
+    assert.match(renderer, /addPart\(desired, "project-list"/);
+    assert.match(renderer, /addPart\(desired, "composer"/);
+    assert.match(css, /\[data-ds-part="main"\]/);
+    assert.match(css, /\[data-ds-part="composer"\]/);
   });
 
-  it("keeps transient new-chat drafts on native geometry", async () => {
+  it("keeps home text, project selector, and composer above the wallpaper", async () => {
     const renderer = await readFile(
       new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url),
       "utf8",
@@ -172,12 +172,13 @@ describe("dream skin theme helpers", () => {
       "utf8",
     );
 
-    assert.match(renderer, /homeHasClassicChrome/);
-    assert.match(renderer, /data-dream-home-layout/);
-    assert.match(renderer, /data-dream-home-layout.*soft/);
-    assert.match(css, /data-dream-home-layout.*structured/);
-    assert.match(css, /overflow-y: auto !important/);
+    assert.match(renderer, /"key":"home-route"/);
+    assert.match(renderer, /"key":"project-selector"/);
+    assert.match(renderer, /"key":"composer-chrome"/);
+    assert.match(css, /\[data-ds-part="home"\] > \*/);
+    assert.match(css, /\.group\\\/project-selector/);
     assert.match(css, /\.composer-surface-chrome/);
+    assert.match(css, /z-index: 2/);
   });
 
   it("exposes companion image controls in the theme editor", async () => {

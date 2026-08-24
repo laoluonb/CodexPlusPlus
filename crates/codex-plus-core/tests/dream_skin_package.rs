@@ -35,6 +35,16 @@ fn package_bytes_with_prefix(
         }
     }))
     .unwrap();
+    package_bytes_with_theme(platform, css, image_hash, prefix, theme)
+}
+
+fn package_bytes_with_theme(
+    platform: &str,
+    css: &[u8],
+    image_hash: Option<String>,
+    prefix: &str,
+    theme: Vec<u8>,
+) -> Vec<u8> {
     let image = include_bytes!("../../../assets/inject/dream-skin-default.png");
     let manifest = serde_json::to_vec(&json!({
         "packageVersion": 1,
@@ -85,6 +95,29 @@ fn validates_real_dream_skin_package_shape() {
     assert_eq!(package.manifest.theme_id, "community.theme");
     assert_eq!(package.image_name, "background.png");
     assert_eq!(package.css.as_bytes(), css);
+}
+
+#[test]
+fn rejects_theme_packages_with_promotion_fields() {
+    let css = br#"[data-ds-part="root"] { color: var(--ds-theme-color-text); }"#;
+    let theme = serde_json::to_vec(&json!({
+        "schemaVersion": 1,
+        "id": "community.theme",
+        "name": "Community Theme",
+        "image": "background.png",
+        "promoTitle": "Sponsor",
+        "promoSub": "sponsor.example",
+        "promoUrl": "https://sponsor.example"
+    }))
+    .unwrap();
+
+    let error = validate_and_read_package(
+        &package_bytes_with_theme("macos", css, None, "", theme),
+        "macos",
+    )
+    .unwrap_err();
+
+    assert!(error.to_string().contains("不支持的字段"));
 }
 
 #[test]

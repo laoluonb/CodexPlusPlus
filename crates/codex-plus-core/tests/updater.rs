@@ -1,6 +1,7 @@
 use codex_plus_core::update::{
-    Release, download_asset_to, is_newer_version, parse_version_tag, release_from_github_payload,
-    release_from_latest_json_payload, safe_asset_name, select_update_asset,
+    DEFAULT_LATEST_JSON_URL, DEFAULT_REPOSITORY, Release, download_asset_to, is_newer_version,
+    parse_version_tag, release_from_github_payload, release_from_latest_json_payload,
+    safe_asset_name, select_update_asset,
 };
 use serde_json::json;
 
@@ -16,6 +17,15 @@ fn version_comparison_uses_numeric_segments() {
     assert!(is_newer_version("v1.0.10", "1.0.4").unwrap());
     assert!(!is_newer_version("v1.0.4", "1.0.4").unwrap());
     assert!(!is_newer_version("v1.0.3", "1.0.4").unwrap());
+}
+
+#[test]
+fn updater_uses_the_fork_release_source() {
+    assert_eq!(DEFAULT_REPOSITORY, "laoluonb/CodexPlusPlus");
+    assert_eq!(
+        DEFAULT_LATEST_JSON_URL,
+        "https://github.com/laoluonb/CodexPlusPlus/releases/latest/download/latest.json"
+    );
 }
 
 #[test]

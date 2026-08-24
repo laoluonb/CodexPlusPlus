@@ -47,7 +47,8 @@ const DREAM_SKIN_DEFAULT_IMAGE: &[u8] =
 const PET_REAL_MOUSE_SCRIPT: &str = include_str!("../../../assets/inject/pet-real-mouse-inject.js");
 const STEPWISE_SCRIPT: &str = include_str!("../../../assets/inject/stepwise-inject.js");
 pub const DIAGNOSTIC_BUILD_ID: &str = "diag-20260518-1";
-const DREAM_SKIN_RENDERER_REVISION: &str = "20-modern-main-surface";
+pub const DREAM_SKIN_VERSION: &str = "1.5.14";
+const DREAM_SKIN_RENDERER_REVISION: &str = "21-dream-skin-1.5.14";
 
 pub fn renderer_script() -> &'static str {
     RENDERER_SCRIPT
@@ -151,7 +152,7 @@ fn dream_skin_target_runtime_script(settings: &BackendSettings, include_art: boo
         )
         .replace(
             "__DREAM_SKIN_VERSION_JSON__",
-            &serde_json::to_string("1.2.0").unwrap(),
+            &serde_json::to_string(DREAM_SKIN_VERSION).unwrap(),
         )
         .replace(
             "__DREAM_SKIN_STYLE_REVISION_JSON__",
@@ -174,7 +175,7 @@ fn dream_skin_target_runtime_script(settings: &BackendSettings, include_art: boo
     });
     let skin_api_bootstrap = dream_skin_skin_api_bootstrap_script(&theme);
     payload = format!(
-        "(() => {{\nwindow.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ = true;\nwindow.__CODEX_PLUS_CLEAR_DREAM_SKIN__?.();\n{}window.__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_THEME__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__ = {};\n{}const result = {};\nconst state = window.__CODEX_DREAM_SKIN_STATE__ || window.__CODEX_GLASS_VISION_SKIN_STATE__;\nif (state) {{\n  state.version = `codex-plus:${{String(window.__CODEX_PLUS_DREAM_SKIN_PLATFORM__ || 'unknown')}}:${{window.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__}}:r${{window.__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__}}`;\n  state.observer?.disconnect?.();\n  if (state.timer) clearInterval(state.timer);\n  state.observer = null;\n  state.timer = null;\n}}\nwindow.__CODEX_PLUS_DREAM_SKIN_PAYLOAD_SIGNATURE__ = {};\nreturn result;\n}})()",
+        "(() => {{\nwindow.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ = true;\nwindow.__CODEX_PLUS_CLEAR_DREAM_SKIN__?.();\n{}window.__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_THEME__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__ = {};\n{}const result = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_PAYLOAD_SIGNATURE__ = {};\nreturn result;\n}})()",
         art_assignment.unwrap_or_default(),
         serde_json::to_string(&dream_skin_art_content_signature(settings)).unwrap(),
         theme,

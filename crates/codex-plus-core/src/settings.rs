@@ -339,18 +339,6 @@ impl Default for DreamSkinThemeConfig {
                 "image".to_string(),
                 Value::String("portal-hero.png".to_string()),
             );
-            extra_fields.insert(
-                "promoTitle".to_string(),
-                Value::String("感谢 Passion8 赞助".to_string()),
-            );
-            extra_fields.insert(
-                "promoSub".to_string(),
-                Value::String("passion8.cc".to_string()),
-            );
-            extra_fields.insert(
-                "promoUrl".to_string(),
-                Value::String("https://passion8.cc/register?aff=TuPe".to_string()),
-            );
         }
         Self {
             schema_version: default_dream_skin_schema_version(),
@@ -1144,6 +1132,10 @@ impl SettingsStore {
             "relayContextConfigContents".to_string(),
             Value::String(settings.relay_context_config_contents.clone()),
         );
+        raw.insert(
+            "codexAppDreamSkinThemeConfig".to_string(),
+            serde_json::to_value(&settings.codex_app_dream_skin_theme_config)?,
+        );
         let bytes = serde_json::to_vec_pretty(&Value::Object(raw))?;
         atomic_write(&self.path, &bytes)?;
         Ok(settings)
@@ -1583,6 +1575,12 @@ fn normalize_settings_config_sections(mut settings: BackendSettings) -> BackendS
         normalize_image_overlay_fit_mode(&settings.codex_app_image_overlay_fit_mode);
     settings.codex_app_dream_skin_theme =
         normalize_dream_skin_theme(&settings.codex_app_dream_skin_theme);
+    for key in ["promoTitle", "promoSub", "promoUrl"] {
+        settings
+            .codex_app_dream_skin_theme_config
+            .extra_fields
+            .remove(key);
+    }
     if settings.codex_app_dream_skin_theme_config == DreamSkinThemeConfig::default()
         && settings.codex_app_dream_skin_theme != default_dream_skin_theme()
     {

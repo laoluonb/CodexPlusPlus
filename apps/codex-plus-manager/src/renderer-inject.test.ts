@@ -244,15 +244,16 @@ describe("renderer injection header compatibility", () => {
   });
 
   it("keeps Windows Dream Skin compatible with the modern Codex main surface", async () => {
-    const windowsRenderers = await Promise.all([
+    const [dreamSkinRenderer, cidalaRenderer] = await Promise.all([
       readFile(new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url), "utf8"),
       readFile(new URL("../../../assets/inject/upstream/cidala-tiger/windows/renderer-inject.js", import.meta.url), "utf8"),
     ]);
 
-    for (const renderer of windowsRenderers) {
-      assert.match(renderer, /MainContentSurface/);
-      assert.match(renderer, /data-codex-plus-dream-surface/);
-      assert.match(renderer, /ensureShellMain/);
-    }
+    assert.match(dreamSkinRenderer, /_MainContentSurface_/);
+    assert.match(dreamSkinRenderer, /resolvedMainNode/);
+    assert.match(dreamSkinRenderer, /fallbackMainNodes/);
+    assert.match(cidalaRenderer, /MainContentSurface/);
+    assert.match(cidalaRenderer, /data-codex-plus-dream-surface/);
+    assert.match(cidalaRenderer, /ensureShellMain/);
   });
 });

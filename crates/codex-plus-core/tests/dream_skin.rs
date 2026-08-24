@@ -23,7 +23,9 @@ fn backend_settings_defaults_to_upstream_platform_theme_config() {
         assert_eq!(theme.name, "Dream Skin");
         assert_eq!(theme.tagline, "把喜欢的画面变成可交互的 Codex 工作台。");
         assert_eq!(theme.colors.as_ref().unwrap().accent, "#E25563");
-        assert_eq!(theme.extra_fields["promoSub"], "passion8.cc");
+        assert!(!theme.extra_fields.contains_key("promoTitle"));
+        assert!(!theme.extra_fields.contains_key("promoSub"));
+        assert!(!theme.extra_fields.contains_key("promoUrl"));
     }
     assert!(!settings.codex_app_dream_skin_paused);
 }
@@ -49,9 +51,6 @@ fn target_theme_fields_survive_deserialize_and_serialize() {
             "taskMode": "ambient"
         },
         "palette": { "accent": "#123456", "custom": "keep" },
-        "promoTitle": "Sponsor",
-        "promoSub": "sponsor.example",
-        "promoUrl": "https://sponsor.example",
         "customTargetField": { "nested": true }
     });
 
@@ -63,15 +62,51 @@ fn target_theme_fields_survive_deserialize_and_serialize() {
         "appearance",
         "art",
         "palette",
-        "promoTitle",
-        "promoSub",
-        "promoUrl",
         "customTargetField",
     ] {
         assert_eq!(saved[key], source[key], "target field changed: {key}");
     }
     assert!(saved.get("colors").is_none());
     assert!(saved.get("stylePreset").is_none());
+}
+
+#[test]
+fn settings_normalization_removes_legacy_dream_skin_promotion_fields() {
+    let temp = tempfile::tempdir().unwrap();
+    let settings_path = temp.path().join("settings.json");
+    std::fs::write(
+        &settings_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "codexAppDreamSkinThemeConfig": {
+                "schemaVersion": 1,
+                "id": "legacy-theme",
+                "name": "Legacy Theme",
+                "promoTitle": "Sponsor",
+                "promoSub": "sponsor.example",
+                "promoUrl": "https://sponsor.example"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let store = SettingsStore::new(settings_path.clone());
+    let settings = store.load().unwrap();
+    let fields = settings.codex_app_dream_skin_theme_config.extra_fields;
+
+    assert!(!fields.contains_key("promoTitle"));
+    assert!(!fields.contains_key("promoSub"));
+    assert!(!fields.contains_key("promoUrl"));
+
+    store.update(serde_json::json!({})).unwrap();
+    let persisted: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(settings_path).unwrap()).unwrap();
+    let persisted_theme = persisted["codexAppDreamSkinThemeConfig"]
+        .as_object()
+        .unwrap();
+    assert!(!persisted_theme.contains_key("promoTitle"));
+    assert!(!persisted_theme.contains_key("promoSub"));
+    assert!(!persisted_theme.contains_key("promoUrl"));
 }
 
 #[test]
