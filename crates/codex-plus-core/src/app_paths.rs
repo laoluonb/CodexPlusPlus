@@ -83,8 +83,8 @@ pub fn find_latest_codex_app_dir_from_roots(roots: &[PathBuf]) -> Option<PathBuf
 pub fn find_latest_codex_app_dir_default() -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        find_latest_codex_app_dir_from_roots(&windows_app_package_roots())
-            .or_else(find_latest_codex_app_dir_from_appx_package)
+        find_latest_codex_app_dir_from_appx_package()
+            .or_else(|| find_latest_codex_app_dir_from_roots(&windows_app_package_roots()))
     }
 
     #[cfg(not(windows))]

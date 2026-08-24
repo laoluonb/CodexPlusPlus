@@ -104,19 +104,22 @@ pub fn macos_arch_name(rust_arch: &str) -> &str {
 
 pub fn parse_renderer_verification(raw: Value) -> anyhow::Result<DreamSkinVerification> {
     let installed = bool_at(&raw, "/installed");
+    let managed_runtime = bool_at(&raw, "/managedRuntime");
     let version = raw
         .get("version")
         .and_then(Value::as_str)
         .map(ToString::to_string);
     let style = bool_at(&raw, "/stylePresent");
-    let chrome = bool_at(&raw, "/chromePresent")
-        && raw.get("chromePointerEvents").and_then(Value::as_str) == Some("none");
+    let chrome_present = bool_at(&raw, "/chromePresent");
+    let chrome = !chrome_present
+        || raw.get("chromePointerEvents").and_then(Value::as_str) == Some("none");
     let sidebar = bool_at(&raw, "/sidebar/visible");
     let composer = bool_at(&raw, "/composer/visible");
     let no_horizontal_overflow = !bool_at(&raw, "/documentOverflow/x");
     let no_vertical_overflow = !bool_at(&raw, "/documentOverflow/y");
     let home_route = bool_at(&raw, "/homeRoute");
     let home_pass = !home_route
+        || bool_at(&raw, "/homeReady")
         || (bool_at(&raw, "/homePresent")
             && bool_at(&raw, "/hero/visible")
             && raw
@@ -125,7 +128,9 @@ pub fn parse_renderer_verification(raw: Value) -> anyhow::Result<DreamSkinVerifi
                 .is_some_and(|count| (1..=6).contains(&count)));
     let version_pass = version
         .as_deref()
-        .is_some_and(|value| value.starts_with("codex-plus:"));
+        .is_some_and(|value| {
+            !value.trim().is_empty() && (managed_runtime || value.starts_with("codex-plus:"))
+        });
 
     let mut checks = vec![
         bool_check(
@@ -153,8 +158,12 @@ pub fn parse_renderer_verification(raw: Value) -> anyhow::Result<DreamSkinVerifi
             "chrome",
             "装饰层",
             chrome,
-            "装饰层存在且不拦截点击。",
-            "装饰层缺失或会拦截点击。",
+            if chrome_present {
+                "装饰层存在且不拦截点击。"
+            } else {
+                "当前皮肤不需要独立装饰层。"
+            },
+            "装饰层会拦截点击。",
         ),
         bool_check(
             "sidebar",
@@ -163,12 +172,19 @@ pub fn parse_renderer_verification(raw: Value) -> anyhow::Result<DreamSkinVerifi
             "原生侧栏可见。",
             "原生侧栏不可见。",
         ),
-        bool_check(
+        check(
             "composer",
             "原生输入框",
-            composer,
-            "原生输入框可见。",
-            "原生输入框不可见。",
+            if composer {
+                DreamSkinCheckLevel::Pass
+            } else {
+                DreamSkinCheckLevel::Warning
+            },
+            if composer {
+                "原生输入框可见。"
+            } else {
+                "当前页面未显示输入框；输入框属于可选页面部件。"
+            },
         ),
         bool_check(
             "home",
@@ -406,31 +422,50 @@ pub fn renderer_verification_script() -> &'static str {
       visible: rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden",
     };
   };
-  const homeSignal = document.querySelector('[data-testid="home-icon"]') ||
+  const state = window.__CODEX_DREAM_SKIN_STATE__ ||
+    window.__CODEX_GLASS_VISION_SKIN_STATE__ || null;
+  const root = document.documentElement;
+  const managedRuntime = window.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ === true &&
+    typeof window.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__ === 'string';
+  const homeSignal = document.querySelector('[data-ds-part="home"]') ||
+    document.querySelector('[data-testid="home-icon"]') ||
     document.querySelector('[data-feature="game-source"]') ||
     document.querySelector('.group\\/home-suggestions');
-  const homeRoute = homeSignal?.closest('[role="main"]') || null;
-  const home = document.querySelector('[role="main"].dream-home, [role="main"].dream-skin-home, [role="main"].glass-vision-home');
+  const homeRoute = state?.scope?.baseState === 'home' || Boolean(homeSignal?.closest('[role="main"], main'));
+  const home = document.querySelector('[data-ds-part="home"], [role="main"].dream-home, [role="main"].dream-skin-home, [role="main"].glass-vision-home');
   const suggestions = home?.querySelector('.group\\/home-suggestions') || null;
   const cards = suggestions ? [...suggestions.querySelectorAll('button')].map(box) : [];
   const chrome = document.getElementById('codex-dream-skin-chrome') ||
-    document.getElementById('codex-glass-vision-skin-chrome');
+    document.getElementById('codex-glass-vision-skin-chrome') ||
+    document.getElementById('codex-theme-chrome');
+  const adoptedStylePresent = state?.styleSheet &&
+    [...(document.adoptedStyleSheets || [])].includes(state.styleSheet);
+  const stylePresent = Boolean(
+    document.getElementById('codex-dream-skin-style') ||
+    document.getElementById('codex-glass-vision-skin-style') ||
+    state?.styleNode?.isConnected ||
+    adoptedStylePresent
+  );
+  const missingHomeAnchors = Array.isArray(state?.scope?.missingL1)
+    ? state.scope.missingL1 : [];
   return JSON.stringify({
-    installed: document.documentElement.classList.contains('codex-dream-skin') ||
-      document.documentElement.classList.contains('codex-glass-vision-skin'),
-    version: window.__CODEX_DREAM_SKIN_STATE__?.version ||
-      window.__CODEX_GLASS_VISION_SKIN_STATE__?.version || null,
-    stylePresent: Boolean(document.getElementById('codex-dream-skin-style') ||
-      document.getElementById('codex-glass-vision-skin-style')),
+    installed: root.getAttribute('data-dream-skin') === 'active' ||
+      root.classList.contains('codex-dream-skin') ||
+      root.classList.contains('codex-glass-vision-skin') ||
+      Boolean(state?.ensure),
+    managedRuntime,
+    version: state?.version || null,
+    stylePresent,
     chromePresent: Boolean(chrome),
     chromePointerEvents: getComputedStyle(chrome || document.body).pointerEvents,
-    homeRoute: Boolean(homeRoute),
+    homeRoute,
     homePresent: Boolean(home),
-    hero: box(home?.firstElementChild?.firstElementChild?.firstElementChild),
+    homeReady: Boolean(home) && missingHomeAnchors.length === 0,
+    hero: box(document.querySelector('[data-ds-part="home-hero"]') || home?.firstElementChild?.firstElementChild?.firstElementChild),
     visibleCardCount: cards.filter((item) => item?.visible).length,
     projectButton: box(home?.querySelector('.group\\/project-selector > button')),
-    composer: box(document.querySelector('.composer-surface-chrome')),
-    sidebar: box(document.querySelector('aside.app-shell-left-panel')),
+    composer: box(document.querySelector('[data-ds-part="composer"], .composer-surface-chrome')),
+    sidebar: box(document.querySelector('[data-ds-part="sidebar"], aside.app-shell-left-panel')),
     documentOverflow: {
       x: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       y: document.documentElement.scrollHeight > document.documentElement.clientHeight,

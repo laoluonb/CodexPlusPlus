@@ -27,7 +27,6 @@ export const EN_PLAIN: Record<string, string> = {
   "Codex 应用路径": "Codex app path",
   "Codex 意外停止": "Codex stopped unexpectedly",
   "Codex 版本": "Codex version",
-  "Codex 目标": "Codex goals",
   "Codex CLI 路径": "Codex CLI path",
   "Codex++ 导入": "Codex++ import",
   "Codex++ 版本": "Codex++ version",
@@ -431,6 +430,11 @@ export const EN_PLAIN: Record<string, string> = {
   "启用此扩展项": "Enable this entry",
   "启用目标功能": "Enable goals feature",
   "当前继承公共配置；修改后将为该供应商保存独立设置。": "Currently inherited from the common configuration; changing it saves a provider-specific override.",
+  "为该供应商单独开启 Codex 目标功能。": "Enable the Codex goals feature for this provider only.",
+  "包含测试模型、上下文大小与压缩阈值；留空即沿用全局默认值。":
+    "Covers the test model, context size and compaction threshold; leave blank to keep the global defaults.",
+  "官方登录之外再挂一份 API Key，用于额度耗尽时兜底。":
+    "Keep an extra API key alongside the official login as a fallback when the quota runs out.",
   "图片": "Image",
   "图片覆盖层": "Image overlay",
   "在会话列表悬停显示删除按钮，并支持撤销。": "Show a delete button on hover in the session list, with undo support.",
@@ -838,9 +842,20 @@ export const EN_PLAIN: Record<string, string> = {
   "选择应用目录": "Select app directory",
   "选择覆盖图片": "Select overlay image",
   "通用配置文件": "Common config file",
+  "关闭窗口": "Close",
+  "选择模型": "Pick a model",
+  "搜索模型…": "Search models…",
+  "没有匹配的模型。": "No matching models.",
+  "还没有模型列表，先点左边的按钮从上游获取。":
+    "No model list yet — use the button on the left to fetch from upstream.",
+  "应用通用配置": "Apply common config",
+  "编辑通用配置": "Edit common config",
+  "切换到此供应商时，会把通用配置合并进 config.toml。":
+    "Switching to this provider merges the common config into config.toml.",
+  "此供应商只写入自己的 config.toml，不合并通用配置。":
+    "This provider writes only its own config.toml and skips the common config.",
   "配置": "Config",
   "配置文件": "Config file",
-  "配置模型": "Config model",
   "重启 Codex++": "Restart Codex++",
   "重新安装": "Reinstall",
   "重新生成": "Regenerate",

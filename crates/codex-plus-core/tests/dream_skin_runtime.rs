@@ -69,7 +69,7 @@ fn changed_theme_status_requires_a_clean_restart() {
 }
 
 #[test]
-fn verification_requires_visible_composer() {
+fn verification_treats_missing_optional_composer_as_warning() {
     let result = parse_renderer_verification(serde_json::json!({
         "installed": true,
         "version": "codex-plus:windows:custom",
@@ -86,14 +86,68 @@ fn verification_requires_visible_composer() {
     }))
     .unwrap();
 
-    assert_eq!(result.state, DreamSkinState::Fail);
-    assert!(!result.pass);
+    assert_eq!(result.state, DreamSkinState::Pass);
+    assert!(result.pass);
     assert!(
         result
             .checks
             .iter()
-            .any(|check| check.id == "composer" && check.level.as_str() == "fail")
+            .any(|check| check.id == "composer" && check.level.as_str() == "warning")
     );
+}
+
+#[test]
+fn verification_accepts_managed_dream_skin_1_5_runtime_contract() {
+    let result = parse_renderer_verification(serde_json::json!({
+        "installed": true,
+        "managedRuntime": true,
+        "version": "1.5.14",
+        "stylePresent": true,
+        "chromePresent": false,
+        "chromePointerEvents": "auto",
+        "homeRoute": true,
+        "homePresent": true,
+        "homeReady": true,
+        "visibleCardCount": 0,
+        "composer": null,
+        "sidebar": { "visible": true },
+        "documentOverflow": { "x": false, "y": false }
+    }))
+    .unwrap();
+
+    assert_eq!(result.state, DreamSkinState::Pass);
+    assert!(result.pass);
+    assert_eq!(result.version.as_deref(), Some("1.5.14"));
+    assert!(
+        result
+            .checks
+            .iter()
+            .any(|check| check.id == "chrome" && check.level.as_str() == "pass")
+    );
+}
+
+#[test]
+fn windows_auto_detection_prefers_the_registered_store_package() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/app_paths.rs"
+    ))
+    .unwrap();
+    let resolver = source
+        .split("pub fn find_latest_codex_app_dir_default")
+        .nth(1)
+        .unwrap()
+        .split("pub fn user_data_candidates")
+        .next()
+        .unwrap();
+
+    let registered = resolver
+        .find("find_latest_codex_app_dir_from_appx_package()")
+        .unwrap();
+    let directory_fallback = resolver
+        .find("find_latest_codex_app_dir_from_roots")
+        .unwrap();
+    assert!(registered < directory_fallback);
 }
 
 #[test]
