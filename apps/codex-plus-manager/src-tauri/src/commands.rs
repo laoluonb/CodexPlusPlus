@@ -5955,7 +5955,7 @@ mod tests {
     }
 
     #[test]
-    fn active_official_sync_clears_custom_provider() {
+    fn active_official_sync_deactivates_custom_provider() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(
             temp.path().join("config.toml"),
@@ -5982,8 +5982,10 @@ mod tests {
 
         let config = std::fs::read_to_string(temp.path().join("config.toml")).unwrap();
         let auth = std::fs::read_to_string(temp.path().join("auth.json")).unwrap();
-        assert!(!config.contains("model_provider"));
-        assert!(!config.contains("model_providers.custom"));
+        assert!(!config
+            .lines()
+            .any(|line| line.trim_start().starts_with("model_provider =")));
+        assert!(config.contains("[model_providers.custom]"));
         assert!(!auth.contains("OPENAI_API_KEY"));
         assert!(auth.contains("auth_mode"));
     }
