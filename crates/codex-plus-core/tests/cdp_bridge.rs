@@ -599,8 +599,9 @@ fn injection_script_installs_dream_skin_from_backend_settings() {
     assert!(script.contains("window.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ = true"));
     assert!(script.contains("window.__CODEX_PLUS_CLEAR_DREAM_SKIN__?.();"));
     assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__"));
-    assert!(script.contains("state.version = `codex-plus:"));
-    assert!(script.contains("state.observer?.disconnect?.()"));
+    assert!(script.contains("version: VERSION,"));
+    assert!(script.contains("state?.rootObserver?.disconnect();"));
+    assert!(script.contains("state?.partObserver?.disconnect();"));
     assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_PAYLOAD_SIGNATURE__"));
     assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_THEME__"));
     assert!(script.contains("data:image/webp;base64,UklGRg=="));
@@ -1352,7 +1353,9 @@ fn injection_script_keeps_session_action_buttons_in_pr_style() {
 
     assert!(script.contains("actionButtonClass = \"codex-session-action-button\""));
     assert!(script.contains("background: transparent;"));
-    assert!(script.contains("background: #363839;"));
+    assert!(script.contains(
+        "background: var(--codex-session-action-hover-background, transparent);"
+    ));
     assert!(script.contains("cursor: default;"));
 }
 
