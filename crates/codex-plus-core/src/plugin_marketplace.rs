@@ -873,19 +873,28 @@ mod tests {
         let home = temp.path();
         write_marketplace(home);
         write_remote_marketplace(home);
+        let local_source = toml_edit::Value::from(
+            home.join(".tmp")
+                .join("plugins")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        let legacy_source = toml_edit::Value::from(format!(
+            r"\\?\{}",
+            home.join(".tmp").join("plugins").display()
+        ));
         std::fs::write(
             home.join("config.toml"),
             format!(
                 r#"[marketplaces.openai-curated]
 source_type = "local"
-source = "{}"
+source = {}
 
 [marketplaces.openai-api-curated]
 source_type = "local"
-source = '{}'
+source = {}
 "#,
-                home.join(".tmp").join("plugins").display(),
-                format!(r"\\?\{}", home.join(".tmp").join("plugins").display())
+                local_source, legacy_source
             ),
         )
         .unwrap();
