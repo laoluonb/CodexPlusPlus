@@ -18,6 +18,22 @@
 
 Codex++ is an external launcher and manager for the OpenAI Codex / ChatGPT desktop app. It uses Chromium DevTools Protocol and a local helper for provider switching, protocol conversion, session management, Dream Skin themes, and UI enhancements without modifying the official app's `app.asar` or installation files.
 
+## Project Origins and Fork Changes
+
+This repository is a fork of [BigPizzaV3/CodexPlusPlus](https://github.com/BigPizzaV3/CodexPlusPlus) and continues to synchronize selected upstream changes. Its skin switching feature uses the original renderer and CSS from [Fei-Away/Codex-Dream-Skin](https://github.com/Fei-Away/Codex-Dream-Skin) v1.5.14, integrated into Codex++ and adapted for the current Codex desktop UI.
+
+The main changes in this fork include:
+
+- Per-model context window and auto-compaction threshold settings through Codex `model_catalog_json` configuration.
+- Codex-Dream-Skin v1.5.14 renderer integration with compatibility fixes for the current home page, sidebar, project selector, and composer.
+- DreamSkin community, theme marketplace, local themes, background images, live apply, screenshots, and runtime diagnostics. Community and marketplace lists display up to 12 themes per page.
+- Runtime diagnostic fixes for already-active skins and stale saved Windows Store paths left behind after Codex upgrades.
+- GitHub Release update checks, downloads, repository links, and issue links now use `laoluonb/CodexPlusPlus`.
+- Selected upstream improvements for launch stability, provider configuration, session management, and DeepSeek tool history, while retaining this fork's compatibility fixes.
+- Removal of promotional sites, recommendations, promotional presets, sponsorship entries, sponsor images, and promotional theme fields.
+
+The Codex-Dream-Skin code remains under its MIT License; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The rest of this repository remains AGPL-3.0-only. Users are responsible for verifying licenses for third-party theme images and other assets.
+
 ## Quick Start
 
 Download the latest installer from [GitHub Releases](https://github.com/laoluonb/CodexPlusPlus/releases):
