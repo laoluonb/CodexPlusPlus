@@ -345,6 +345,19 @@ describe("dream skin theme helpers", () => {
     assert.match(css, /\.dream-skin-market-preview\s*\{[^}]*aspect-ratio:\s*16 \/ 9/s);
   });
 
+  it("paginates remote theme lists in groups of twelve", async () => {
+    const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+    const css = await readFile(new URL("./styles.css", import.meta.url), "utf8");
+
+    assert.match(app, /const dreamSkinThemePageSize = 12/);
+    assert.match(app, /visibleMarketThemes = \(market\?\.themes \?\? \[\]\)\.slice\(/);
+    assert.match(app, /visibleItems = items\.slice\(/);
+    assert.match(app, /function DreamSkinPagination/);
+    assert.match(app, /setQuery\(event\.currentTarget\.value\);\s*setPage\(1\);/);
+    assert.match(app, /setSort\(value as typeof sort\);\s*setPage\(1\);/);
+    assert.match(css, /\.dream-skin-pagination/);
+  });
+
   it("allows the webview to load managed theme images only", async () => {
     const raw = await readFile(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8");
     const config = JSON.parse(raw);

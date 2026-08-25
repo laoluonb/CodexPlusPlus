@@ -3814,7 +3814,8 @@ input[type="range"]:disabled {
   justify-content: flex-end;
 }
 
-.session-pagination {
+.session-pagination,
+.dream-skin-pagination {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3822,7 +3823,8 @@ input[type="range"]:disabled {
   margin-top: 12px;
 }
 
-.session-pagination span {
+.session-pagination span,
+.dream-skin-pagination span {
   min-width: 72px;
   color: hsl(var(--muted-foreground));
   font-size: 12px;
