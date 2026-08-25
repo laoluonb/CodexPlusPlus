@@ -475,7 +475,7 @@
   const codexServiceTierRequestOverrideVersion = "9";
   const codexAppServerModelRequestPatchVersion = "6";
   const codexRemoteSessionRecoveryVersion = "5";
-  const codexPluginMarketplaceUnlockVersion = "17";
+  const codexPluginMarketplaceUnlockVersion = "18";
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -4325,6 +4325,31 @@
     };
   }
 
+  function pluginMarketplaceRequestParams(params) {
+    if (params?.params && typeof params.params === "object") return params.params;
+    return params && typeof params === "object" ? params : {};
+  }
+
+  function isPluginMarketplaceReadRequest(method) {
+    const normalized = String(method || "").toLowerCase();
+    return normalized === "plugin/read" || normalized.endsWith("/plugin/read");
+  }
+
+  function pluginMarketplaceRequestProfileForMethod(method, params) {
+    const requestParams = pluginMarketplaceRequestParams(params);
+    return {
+      ...pluginMarketplaceRequestProfile(requestParams),
+      kind: isPluginMarketplaceReadRequest(method) ? "plugin-read" : "list-plugins",
+      marketplacePath: typeof requestParams.marketplacePath === "string" ? requestParams.marketplacePath : null,
+      remoteMarketplaceName: typeof requestParams.remoteMarketplaceName === "string" ? requestParams.remoteMarketplaceName : null,
+      pluginName: typeof requestParams.pluginName === "string"
+        ? requestParams.pluginName
+        : typeof requestParams.name === "string"
+          ? requestParams.name
+          : null,
+    };
+  }
+
   function patchPluginMarketplaceRequestParams(method, params) {
     if (method === "list-plugins") {
       if (!params || typeof params !== "object") return params;
@@ -4685,6 +4710,79 @@
     return pluginMarketplaceFallbackResult(false);
   }
 
+  function localPluginMarketplaceDetailFallback(requestProfile = {}) {
+    const requestedPluginName = String(requestProfile.pluginName || "").trim();
+    const requestedMarketplacePath = String(requestProfile.marketplacePath || "").trim();
+    const requestedMarketplaceName = restorePluginMarketplaceName(String(requestProfile.remoteMarketplaceName || ""));
+    const marketplaces = Array.isArray(window.__CODEX_PLUS_PLUGIN_MARKETPLACES__)
+      ? window.__CODEX_PLUS_PLUGIN_MARKETPLACES__
+      : [];
+    for (const marketplace of marketplaces) {
+      if (!marketplace || typeof marketplace !== "object" || !Array.isArray(marketplace.plugins)) continue;
+      const marketplaceName = restorePluginMarketplaceName(marketplace.name || "");
+      const marketplacePath = String(marketplace.path || "");
+      if (requestedMarketplacePath && marketplacePath !== requestedMarketplacePath) continue;
+      if (!requestedMarketplacePath && requestedMarketplaceName && marketplaceName !== requestedMarketplaceName) continue;
+      const plugin = marketplace.plugins.find((candidate) => {
+        const candidateName = String(candidate?.name || candidate?.id || candidate?.pluginName || "").split("@")[0];
+        return candidateName === requestedPluginName;
+      });
+      if (!plugin || typeof plugin !== "object") continue;
+      const cloned = cloneCodexPluginMarketplace(plugin);
+      if (!cloned) continue;
+      const name = String(cloned.name || cloned.id || requestedPluginName).split("@")[0];
+      const interfaceValue = cloned.interface && typeof cloned.interface === "object" ? { ...cloned.interface } : {};
+      const description = String(interfaceValue.longDescription || interfaceValue.shortDescription || cloned.description || "");
+      if (!interfaceValue.displayName) interfaceValue.displayName = name;
+      if (!interfaceValue.shortDescription && description) interfaceValue.shortDescription = description;
+      if (!interfaceValue.longDescription && description) interfaceValue.longDescription = description;
+      if (!interfaceValue.websiteUrl && interfaceValue.websiteURL) interfaceValue.websiteUrl = interfaceValue.websiteURL;
+      if (!interfaceValue.privacyPolicyUrl && interfaceValue.privacyPolicyURL) interfaceValue.privacyPolicyUrl = interfaceValue.privacyPolicyURL;
+      if (!interfaceValue.termsOfServiceUrl && interfaceValue.termsOfServiceURL) interfaceValue.termsOfServiceUrl = interfaceValue.termsOfServiceURL;
+      const source = cloned.source && typeof cloned.source === "object" ? cloned.source : {};
+      const summary = {
+        ...cloned,
+        id: String(cloned.id || `${name}@${marketplaceName}`),
+        name,
+        description,
+        installed: cloned.installed === true,
+        enabled: cloned.enabled === true || cloned.installed === true,
+        authPolicy: cloned.authPolicy || cloned.policy?.authentication || "ON_INSTALL",
+        version: cloned.version || null,
+        localVersion: cloned.localVersion || cloned.version || null,
+        source: {
+          ...source,
+          type: source.type || source.source || "local",
+          path: source.path || cloned.marketplacePath || marketplacePath || null,
+        },
+        interface: interfaceValue,
+      };
+      return {
+        plugin: {
+          summary,
+          marketplaceName: cloned.marketplaceName || marketplaceName,
+          marketplacePath: cloned.marketplacePath || marketplacePath || null,
+          apps: Array.isArray(cloned.apps) ? cloned.apps : [],
+          appTemplates: Array.isArray(cloned.appTemplates) ? cloned.appTemplates : [],
+          mcpServers: Array.isArray(cloned.mcpServers) ? cloned.mcpServers : [],
+          skills: Array.isArray(cloned.skills) ? cloned.skills : [],
+          hooks: Array.isArray(cloned.hooks) ? cloned.hooks : [],
+          shareUrl: null,
+        },
+      };
+    }
+    return null;
+  }
+
+  function pluginMarketplaceRemoteAuthFallback(requestProfile) {
+    if (requestProfile?.kind === "plugin-read") {
+      return localPluginMarketplaceDetailFallback(requestProfile);
+    }
+    return requestProfile?.remoteOnly
+      ? remoteOnlyPluginMarketplaceFallbackResult()
+      : localPluginMarketplaceFallbackResult();
+  }
+
   function patchPluginMarketplaceRequestClient(client) {
     if (!client || typeof client.sendRequest !== "function") return false;
     if (client.__codexPluginMarketplaceUnlockPatch === codexPluginMarketplaceUnlockVersion) return true;
@@ -4711,17 +4809,16 @@
         }
       }
       const restoredRequestParams = restorePluginMarketplaceRequestParams(params, requestMethod);
-      const requestProfile = pluginMarketplaceRequestProfile(restoredRequestParams);
+      const requestProfile = pluginMarketplaceRequestProfileForMethod(requestMethod, restoredRequestParams);
       const requestParams = patchPluginMarketplaceRequestParams(requestMethod, restoredRequestParams);
       try {
         const result = await originalSendRequest(method, requestParams, options);
         return patchPluginMarketplaceResult(requestMethod, result, { mergeLocal: !requestProfile.remoteOnly });
       } catch (error) {
-        if (requestMethod === "list-plugins" && pluginMarketplaceRemoteAuthError(error)) {
+        if ((requestMethod === "list-plugins" || isPluginMarketplaceReadRequest(requestMethod)) && pluginMarketplaceRemoteAuthError(error)) {
           markPluginMarketplaceRemoteCatalogUnavailable(error);
-          return requestProfile.remoteOnly
-            ? remoteOnlyPluginMarketplaceFallbackResult()
-            : localPluginMarketplaceFallbackResult();
+          const fallback = pluginMarketplaceRemoteAuthFallback(requestProfile);
+          if (fallback) return fallback;
         }
         throw error;
       }
@@ -4734,7 +4831,8 @@
     if (!message || typeof message !== "object") return message;
     if (message.type === "fetch" && typeof message.url === "string") {
       const requestMethod = appServerModelRequestMethod(message.url, message.body);
-      if (requestMethod !== "list-plugins" && requestMethod !== "install-plugin") return message;
+      const isPluginRead = isPluginMarketplaceReadRequest(requestMethod);
+      if (requestMethod !== "list-plugins" && !isPluginRead && requestMethod !== "install-plugin") return message;
       if (requestMethod === "install-plugin") return message;
       let requestBody = message.body;
       let params = null;
@@ -4748,9 +4846,9 @@
         params = requestBody;
       }
       const restoredRequestParams = restorePluginMarketplaceRequestParams(params, requestMethod);
-      const requestProfile = pluginMarketplaceRequestProfile(restoredRequestParams);
+      const requestProfile = pluginMarketplaceRequestProfileForMethod(requestMethod, restoredRequestParams);
       const requestParams = patchPluginMarketplaceRequestParams(requestMethod, restoredRequestParams);
-      if (requestMethod === "list-plugins" && message.requestId != null) {
+      if ((requestMethod === "list-plugins" || isPluginRead) && message.requestId != null) {
         window.__codexPluginMarketplaceFetchRequestIds = window.__codexPluginMarketplaceFetchRequestIds || new Set();
         const requestId = String(message.requestId);
         window.__codexPluginMarketplaceFetchRequestIds.add(requestId);
@@ -4765,12 +4863,13 @@
     }
     if (message.type === "mcp-request" && message.request && typeof message.request === "object") {
       const requestMethod = appServerModelRequestMethod(String(message.request.method || ""), message.request.params);
-      if (requestMethod !== "list-plugins" && requestMethod !== "install-plugin") return message;
+      const isPluginRead = isPluginMarketplaceReadRequest(requestMethod);
+      if (requestMethod !== "list-plugins" && !isPluginRead && requestMethod !== "install-plugin") return message;
       if (requestMethod === "install-plugin") return message;
       const restoredRequestParams = restorePluginMarketplaceRequestParams(message.request.params, requestMethod);
-      const requestProfile = pluginMarketplaceRequestProfile(restoredRequestParams);
+      const requestProfile = pluginMarketplaceRequestProfileForMethod(requestMethod, restoredRequestParams);
       const requestParams = patchPluginMarketplaceRequestParams(requestMethod, restoredRequestParams);
-      if (requestMethod === "list-plugins" && message.request.id != null) {
+      if ((requestMethod === "list-plugins" || isPluginRead) && message.request.id != null) {
         window.__codexPluginMarketplaceRequestIds = window.__codexPluginMarketplaceRequestIds || new Set();
         const requestId = String(message.request.id);
         window.__codexPluginMarketplaceRequestIds.add(requestId);
@@ -4789,19 +4888,16 @@
       const requestIds = window.__codexPluginMarketplaceFetchRequestIds;
       const requestProfiles = window.__codexPluginMarketplaceFetchRequestProfiles;
       const requestProfile = requestProfiles instanceof Map ? requestProfiles.get(requestId) : null;
-      if (requestIds instanceof Set && requestIds.size > 0) {
-        if (!requestIds.has(requestId)) return false;
-        requestIds.delete(requestId);
-      }
-      if (requestProfiles instanceof Map) requestProfiles.delete(requestId);
+      if (!(requestIds instanceof Set) || !requestIds.has(requestId) || !(requestProfiles instanceof Map)) return false;
+      requestIds.delete(requestId);
+      requestProfiles.delete(requestId);
       if (typeof data.bodyJsonString !== "string" || !data.bodyJsonString.trim()) return false;
       try {
         let result = JSON.parse(data.bodyJsonString);
         if (pluginMarketplaceRemoteAuthError(result?.error || result)) {
           markPluginMarketplaceRemoteCatalogUnavailable(result?.error || result);
-          const fallback = requestProfile?.remoteOnly
-            ? remoteOnlyPluginMarketplaceFallbackResult()
-            : localPluginMarketplaceFallbackResult();
+          const fallback = pluginMarketplaceRemoteAuthFallback(requestProfile);
+          if (!fallback) return false;
           if (result && typeof result === "object" && Object.prototype.hasOwnProperty.call(result, "id")) {
             delete result.error;
             result.result = fallback;
@@ -4833,17 +4929,15 @@
     const requestIds = window.__codexPluginMarketplaceRequestIds;
     const requestProfiles = window.__codexPluginMarketplaceRequestProfiles;
     const requestProfile = requestProfiles instanceof Map ? requestProfiles.get(requestId) : null;
-    if (requestIds instanceof Set && requestIds.size > 0) {
-      if (!requestIds.has(requestId)) return false;
-      requestIds.delete(requestId);
-    }
-    if (requestProfiles instanceof Map) requestProfiles.delete(requestId);
+    if (!(requestIds instanceof Set) || !requestIds.has(requestId) || !(requestProfiles instanceof Map)) return false;
+    requestIds.delete(requestId);
+    requestProfiles.delete(requestId);
     if (pluginMarketplaceRemoteAuthError(message?.error)) {
       markPluginMarketplaceRemoteCatalogUnavailable(message.error);
+      const fallback = pluginMarketplaceRemoteAuthFallback(requestProfile);
+      if (!fallback) return false;
       delete message.error;
-      message.result = requestProfile?.remoteOnly
-        ? remoteOnlyPluginMarketplaceFallbackResult()
-        : localPluginMarketplaceFallbackResult();
+      message.result = fallback;
       return true;
     }
     const result = message?.result;
@@ -4862,6 +4956,7 @@
       patchResponseData: patchPluginMarketplaceResponseData,
       remoteAuthError: pluginMarketplaceRemoteAuthError,
       localFallback: localPluginMarketplaceFallbackResult,
+      localDetailFallback: localPluginMarketplaceDetailFallback,
       remoteOnlyFallback: remoteOnlyPluginMarketplaceFallbackResult,
       requestProfile: pluginMarketplaceRequestProfile,
       isBuildFlavorFilter: isCodexPluginBuildFlavorFilter,

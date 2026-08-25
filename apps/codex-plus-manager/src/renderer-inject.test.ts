@@ -165,7 +165,9 @@ function positionCodexPlusPageRuntime(renderer: string) {
 type MarketplaceTestRuntime = {
   patchRequestClient: (client: Record<string, unknown>) => boolean;
   patchRequestMessage: (message: Record<string, unknown>) => Record<string, unknown>;
+  patchResponseData: (message: Record<string, unknown>) => boolean;
   localFallback: () => { marketplaces: Array<{ plugins?: Array<{ marketplacePath?: string }> }> };
+  localDetailFallback: (profile: Record<string, unknown>) => { plugin?: { summary?: { name?: string; interface?: { shortDescription?: string } } } } | null;
 };
 
 function pluginMarketplaceRequestRuntime(renderer: string): MarketplaceTestRuntime {
@@ -178,7 +180,11 @@ function pluginMarketplaceRequestRuntime(renderer: string): MarketplaceTestRunti
     __CODEX_PLUS_PLUGIN_MARKETPLACES__: [{
       name: "fixture-local",
       path: "C:/fixture/marketplace.json",
-      plugins: [{ name: "alpha", marketplaceName: "fixture-local" }],
+      plugins: [{
+        name: "alpha",
+        marketplaceName: "fixture-local",
+        interface: { shortDescription: "Fixture plugin" },
+      }],
     }],
   };
   const requestMethod = (method: string) => {
@@ -689,7 +695,7 @@ describe("renderer injection plugin marketplace patch", () => {
     };
     assert.equal(runtime.patchRequestMessage(fetchMessage), fetchMessage);
     assert.equal(runtime.patchRequestMessage(mcpMessage), mcpMessage);
-    assert.match(renderer, /codexPluginMarketplaceUnlockVersion\s*=\s*"17"/);
+    assert.match(renderer, /codexPluginMarketplaceUnlockVersion\s*=\s*"18"/);
   });
 
   it("continues expanding plugin list requests while install requests stay native", async () => {
@@ -712,6 +718,38 @@ describe("renderer injection plugin marketplace patch", () => {
     const fallback = runtime.localFallback();
 
     assert.equal(fallback.marketplaces[0]?.plugins?.[0]?.marketplacePath, "C:/fixture/marketplace.json");
+  });
+
+  it("returns a local plugin detail object when API Key auth blocks plugin/read", async () => {
+    const runtime = pluginMarketplaceRequestRuntime(await readFile(rendererPath, "utf8"));
+    const detailRequest = {
+      type: "mcp-request",
+      request: {
+        id: "detail-1",
+        method: "plugin/read",
+        params: { marketplacePath: "C:/fixture/marketplace.json", pluginName: "alpha" },
+      },
+    };
+    const remoteAuthMessage = "read remote plugin details: chatgpt authentication required for remote plugin catalog; api key auth is not supported";
+    const detailResponse: {
+      type: string;
+      message: {
+        id: string;
+        error?: { message: string };
+        result?: unknown;
+      };
+    } = {
+      type: "mcp-response",
+      message: { id: "detail-1", error: { message: remoteAuthMessage } },
+    };
+
+    assert.equal(runtime.patchRequestMessage(detailRequest), detailRequest);
+    assert.equal(runtime.patchResponseData(detailResponse), true);
+    const detail = detailResponse.message.result as {
+      plugin: { summary: { name: string; interface: { shortDescription: string } } };
+    };
+    assert.equal(detail.plugin.summary.name, "alpha");
+    assert.equal(detail.plugin.summary.interface.shortDescription, "Fixture plugin");
   });
 
   // issue #1960：scanDeferred() 每轮都调用这个补丁，而早退守卫只在打上补丁后才写入。
