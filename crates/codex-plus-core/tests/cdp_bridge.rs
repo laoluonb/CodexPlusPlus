@@ -1045,9 +1045,7 @@ fn injection_script_expands_api_key_plugin_marketplace_requests() {
     assert!(script.contains("cloned.marketplaceName = marketplaceName"));
     assert!(script.contains("cloned.marketplacePath = marketplaceName"));
     assert!(script.contains("restorePluginMarketplaceName"));
-    assert!(script.contains(
-        "next.remoteMarketplaceName = restorePluginMarketplaceName(next.remoteMarketplaceName)"
-    ));
+    assert!(script.contains("if (method && method !== \"list-plugins\") return params;"));
     assert!(!script.contains("marketplace.name = alias"));
     assert!(script.contains("if (name === \"openai-curated\") return \"OpenAI插件2(Codex++)\""));
     assert!(
@@ -1064,10 +1062,10 @@ fn injection_script_expands_api_key_plugin_marketplace_requests() {
     assert!(script.contains("OpenAI插件1(Codex++)"));
     assert!(script.contains("OpenAI插件2(Codex++)"));
     assert!(script.contains("OpenAI插件3(Codex++)"));
-    assert!(script.contains("method === \"install-plugin\""));
+    assert!(script.contains("requestMethod === \"install-plugin\""));
     assert!(script.contains("plugin_marketplace_response_expanded"));
     assert!(script.contains("plugin_build_flavor_filter_bypassed"));
-    assert!(script.contains("plugin_install_request_debug"));
+    assert!(!script.contains("plugin_install_request_debug"));
     assert!(script.contains("plugin_install_request_failed"));
     assert!(!script.contains("marketplace.path ="));
     assert!(!script.contains("codexPluginMarketplacePathAliasForName"));
