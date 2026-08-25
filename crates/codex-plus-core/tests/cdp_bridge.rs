@@ -979,7 +979,7 @@ fn injection_script_does_not_unlock_disabled_plugin_install_buttons() {
 fn injection_script_keeps_bundled_marketplace_name_for_default_filter() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"16\""));
+    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"17\""));
     assert!(!script.contains("function pluginMarketplaceAliasForName"));
     assert!(
         !script.contains("if (name === \"openai-bundled\") return \"codex-plus-openai-bundled\"")
@@ -991,7 +991,7 @@ fn injection_script_keeps_bundled_marketplace_name_for_default_filter() {
 fn injection_script_does_not_bypass_plugin_marketplace_search_filters() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"16\""));
+    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"17\""));
     assert!(script.contains("codexPluginFilterSourceCache = new WeakMap()"));
     assert!(script.contains("function codexPluginFilterCallbackSource(callback)"));
     assert!(script.contains("isCodexPluginBuildFlavorFilter"));
@@ -1006,7 +1006,7 @@ fn injection_script_does_not_bypass_plugin_marketplace_search_filters() {
 fn injection_script_expands_api_key_plugin_marketplace_requests() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"16\""));
+    assert!(script.contains("codexPluginMarketplaceUnlockVersion = \"17\""));
     assert!(script.contains("installPluginMarketplaceRequestPatch"));
     assert!(script.contains("installPluginMarketplaceBridgePatch"));
     assert!(script.contains("installPluginBuildFlavorFilterPatch"));
@@ -1043,7 +1043,7 @@ fn injection_script_expands_api_key_plugin_marketplace_requests() {
     assert!(script.contains("plugin_marketplace_local_merged"));
     assert!(script.contains("plugin_marketplace_remote_auth_fallback"));
     assert!(script.contains("cloned.marketplaceName = marketplaceName"));
-    assert!(script.contains("cloned.marketplacePath = marketplaceName"));
+    assert!(script.contains("cloned.marketplacePath = marketplacePath"));
     assert!(script.contains("restorePluginMarketplaceName"));
     assert!(script.contains("if (method && method !== \"list-plugins\") return params;"));
     assert!(!script.contains("marketplace.name = alias"));
@@ -1135,6 +1135,10 @@ fn injection_script_recovers_plugin_search_from_remote_auth_errors() {
         json!(["fixture-local"])
     );
     assert_eq!(cases["localFallbackPluginNames"], json!(["alpha"]));
+    assert_eq!(
+        cases["localFallbackPluginMarketplacePaths"],
+        json!(["C:/fixture/marketplace.json"])
+    );
     assert_eq!(cases["chatGptKinds"], json!(["created-by-me-remote"]));
     assert_eq!(cases["unrelatedErrorMatched"], false);
 }
@@ -1267,6 +1271,7 @@ const cases = {{
   latestBroadAfterFallbackKinds: latestBroadAfterFallback.marketplaceKinds,
   localFallbackMarketplaceNames: localFallbackMarketplaces.map((marketplace) => marketplace.name),
   localFallbackPluginNames: localFallbackMarketplaces.flatMap((marketplace) => marketplace.plugins || []).map((plugin) => plugin.name),
+  localFallbackPluginMarketplacePaths: localFallbackMarketplaces.flatMap((marketplace) => marketplace.plugins || []).map((plugin) => plugin.marketplacePath),
   chatGptKinds: chatGpt.marketplaceKinds,
   unrelatedErrorMatched: api.remoteAuthError({{ message: "network unavailable" }}),
 }};

@@ -475,7 +475,7 @@
   const codexServiceTierRequestOverrideVersion = "9";
   const codexAppServerModelRequestPatchVersion = "6";
   const codexRemoteSessionRecoveryVersion = "5";
-  const codexPluginMarketplaceUnlockVersion = "16";
+  const codexPluginMarketplaceUnlockVersion = "17";
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -4425,7 +4425,7 @@
     return String(plugin.name || plugin.id || plugin.pluginName || "").trim();
   }
 
-  function normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName) {
+  function normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName, marketplacePath) {
     const cloned = cloneCodexPluginMarketplace(plugin);
     if (!cloned || typeof cloned !== "object") return null;
     const name = String(cloned.name || cloned.id || cloned.pluginName || "").trim();
@@ -4433,7 +4433,8 @@
     if (!cloned.name) cloned.name = name;
     if (!cloned.id) cloned.id = `${name}@${marketplaceName}`;
     if (!cloned.marketplaceName) cloned.marketplaceName = marketplaceName;
-    if (!cloned.marketplacePath) cloned.marketplacePath = marketplaceName;
+    if (marketplacePath) cloned.marketplacePath = marketplacePath;
+    else if (!cloned.marketplacePath) cloned.marketplacePath = marketplaceName;
     if (!cloned.interface || typeof cloned.interface !== "object") cloned.interface = {};
     if (!cloned.interface.displayName) cloned.interface.displayName = name;
     if (!Array.isArray(cloned.keywords)) cloned.keywords = [];
@@ -4444,12 +4445,13 @@
     if (!target || !source || !Array.isArray(source.plugins)) return 0;
     if (!Array.isArray(target.plugins)) target.plugins = [];
     const marketplaceName = restorePluginMarketplaceName(target.name || source.name || "");
+    const marketplacePath = target.path || source.path || marketplaceName;
     const existing = new Set(target.plugins.map(pluginMarketplacePluginKey).filter(Boolean));
     let added = 0;
     source.plugins.forEach((plugin) => {
       const key = pluginMarketplacePluginKey(plugin);
       if (!key || existing.has(key)) return;
-      const cloned = normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName);
+      const cloned = normalizeLocalPluginMarketplacePlugin(plugin, marketplaceName, marketplacePath);
       if (!cloned) return;
       target.plugins.push(cloned);
       existing.add(key);
@@ -4483,8 +4485,9 @@
       }
       const cloned = cloneCodexPluginMarketplace(marketplace);
       if (!cloned) return;
+      const marketplacePath = cloned.path || marketplace.path || name;
       cloned.plugins = Array.isArray(cloned.plugins)
-        ? cloned.plugins.map((plugin) => normalizeLocalPluginMarketplacePlugin(plugin, name)).filter(Boolean)
+        ? cloned.plugins.map((plugin) => normalizeLocalPluginMarketplacePlugin(plugin, name, marketplacePath)).filter(Boolean)
         : [];
       result.marketplaces.push(cloned);
       byName.set(name, cloned);

@@ -165,6 +165,7 @@ function positionCodexPlusPageRuntime(renderer: string) {
 type MarketplaceTestRuntime = {
   patchRequestClient: (client: Record<string, unknown>) => boolean;
   patchRequestMessage: (message: Record<string, unknown>) => Record<string, unknown>;
+  localFallback: () => { marketplaces: Array<{ plugins?: Array<{ marketplacePath?: string }> }> };
 };
 
 function pluginMarketplaceRequestRuntime(renderer: string): MarketplaceTestRuntime {
@@ -172,7 +173,14 @@ function pluginMarketplaceRequestRuntime(renderer: string): MarketplaceTestRunti
   const end = renderer.indexOf("\n  function clearPluginMarketplaceQueryCache(", start);
   assert.ok(start >= 0 && end > start, "plugin marketplace request block not found");
   const source = renderer.slice(start, end);
-  const windowValue: Record<string, unknown> = { __CODEX_PLUS_TEST_PLUGIN_MARKETPLACE__: true };
+  const windowValue: Record<string, unknown> = {
+    __CODEX_PLUS_TEST_PLUGIN_MARKETPLACE__: true,
+    __CODEX_PLUS_PLUGIN_MARKETPLACES__: [{
+      name: "fixture-local",
+      path: "C:/fixture/marketplace.json",
+      plugins: [{ name: "alpha", marketplaceName: "fixture-local" }],
+    }],
+  };
   const requestMethod = (method: string) => {
     if (/plugin[\/-]install|install-plugin/i.test(method)) return "install-plugin";
     if (/plugin[\/-]list|list-plugins/i.test(method)) return "list-plugins";
@@ -681,7 +689,7 @@ describe("renderer injection plugin marketplace patch", () => {
     };
     assert.equal(runtime.patchRequestMessage(fetchMessage), fetchMessage);
     assert.equal(runtime.patchRequestMessage(mcpMessage), mcpMessage);
-    assert.match(renderer, /codexPluginMarketplaceUnlockVersion\s*=\s*"16"/);
+    assert.match(renderer, /codexPluginMarketplaceUnlockVersion\s*=\s*"17"/);
   });
 
   it("continues expanding plugin list requests while install requests stay native", async () => {
@@ -697,6 +705,13 @@ describe("renderer injection plugin marketplace patch", () => {
       (patched.request as { params: { marketplaceKinds: string[] } }).params.marketplaceKinds,
       ["openai-curated", "local", "vertical"],
     );
+  });
+
+  it("uses the real local marketplace file path for merged plugins", async () => {
+    const runtime = pluginMarketplaceRequestRuntime(await readFile(rendererPath, "utf8"));
+    const fallback = runtime.localFallback();
+
+    assert.equal(fallback.marketplaces[0]?.plugins?.[0]?.marketplacePath, "C:/fixture/marketplace.json");
   });
 
   // issue #1960：scanDeferred() 每轮都调用这个补丁，而早退守卫只在打上补丁后才写入。

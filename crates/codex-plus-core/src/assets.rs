@@ -534,6 +534,7 @@ fn expand_local_plugin_marketplace(
         .nth(3)
         .map(Path::to_path_buf)
         .unwrap_or_else(|| home.join(".tmp").join("plugins"));
+    let marketplace_path_value = marketplace_path.to_string_lossy().to_string();
     for plugin in plugins {
         let Some(plugin_object) = plugin.as_object_mut() else {
             continue;
@@ -572,9 +573,10 @@ fn expand_local_plugin_marketplace(
         plugin_object
             .entry("marketplaceName".to_string())
             .or_insert_with(|| Value::String(marketplace_name.clone()));
-        plugin_object
-            .entry("marketplacePath".to_string())
-            .or_insert_with(|| Value::String(marketplace_name.clone()));
+        plugin_object.insert(
+            "marketplacePath".to_string(),
+            Value::String(marketplace_path_value.clone()),
+        );
         plugin_object
             .entry("keywords".to_string())
             .or_insert_with(|| Value::Array(Vec::new()));
@@ -792,11 +794,31 @@ mod tests {
 
         let marketplaces = local_plugin_marketplaces_from_home(home);
         let array = marketplaces.as_array().unwrap();
+        let curated_marketplace_path = marketplace_dir
+            .join("marketplace.json")
+            .to_string_lossy()
+            .to_string();
+        let api_marketplace_path = marketplace_dir
+            .join("api_marketplace.json")
+            .to_string_lossy()
+            .to_string();
+        let remote_marketplace_path = remote_marketplace_dir
+            .join("marketplace.json")
+            .to_string_lossy()
+            .to_string();
 
         assert_eq!(array.len(), 3);
         assert_eq!(array[0]["name"].as_str(), Some("openai-curated"));
         assert_eq!(array[1]["name"].as_str(), Some("openai-api-curated"));
         assert_eq!(array[2]["name"].as_str(), Some("openai-curated-remote"));
+        assert_eq!(
+            array[0]["plugins"][0]["marketplacePath"].as_str(),
+            Some(curated_marketplace_path.as_str())
+        );
+        assert_eq!(
+            array[1]["plugins"][0]["marketplacePath"].as_str(),
+            Some(api_marketplace_path.as_str())
+        );
         assert_eq!(
             array[1]["plugins"][0]["interface"]["displayName"].as_str(),
             Some("Build Web Apps")
@@ -811,7 +833,7 @@ mod tests {
         );
         assert_eq!(
             array[2]["plugins"][0]["marketplacePath"].as_str(),
-            Some("openai-curated-remote")
+            Some(remote_marketplace_path.as_str())
         );
     }
 }
