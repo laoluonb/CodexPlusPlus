@@ -475,7 +475,7 @@
   const codexServiceTierRequestOverrideVersion = "9";
   const codexAppServerModelRequestPatchVersion = "6";
   const codexRemoteSessionRecoveryVersion = "5";
-  const codexPluginMarketplaceUnlockVersion = "15";
+  const codexPluginMarketplaceUnlockVersion = "16";
   const codexThreadScrollMaxEntries = 120;
   const codexThreadScrollSaveThrottleMs = 120;
   const codexThreadScrollRestoreWindowMs = 3200;
@@ -3872,10 +3872,38 @@
   function positionCodexPlusPage(overlay) {
     if (!overlay?.classList?.contains(codexPlusPageClass)) return;
     const sidebar = document.querySelector("aside.app-shell-left-panel");
-    const rect = sidebar?.getBoundingClientRect?.();
-    const left = rect && rect.width > 0 ? Math.max(0, rect.right) : 0;
+    const sidebarRect = sidebar?.getBoundingClientRect?.();
+    const modularSurface = document.querySelector('main[class*="_MainContentSurface_"]');
+    const mainCandidates = modularSurface ? [] : Array.from(document.querySelectorAll("main"));
+    const mainSurface = modularSurface || (mainCandidates.length === 1 ? mainCandidates[0] : null);
+    const mainRect = mainSurface?.getBoundingClientRect?.();
+    const appHeader = document.querySelector(selectors.appHeader);
+    const headerRect = appHeader?.getBoundingClientRect?.();
+    const viewportWidth = Math.max(0, window.innerWidth || document.documentElement?.clientWidth || 0);
+    const viewportHeight = Math.max(0, window.innerHeight || document.documentElement?.clientHeight || 0);
+    const validMainRect = mainRect && mainRect.width > 0 && mainRect.height > 0;
+    const left = validMainRect
+      ? Math.max(0, mainRect.left, sidebarRect?.right || 0)
+      : sidebarRect && sidebarRect.width > 0
+        ? Math.max(0, sidebarRect.right)
+        : 0;
+    let top = validMainRect ? Math.max(0, mainRect.top) : 0;
+    if (
+      headerRect
+      && headerRect.width > 0
+      && headerRect.height > 0
+      && headerRect.height <= 96
+      && headerRect.top <= top + 8
+      && headerRect.bottom > top
+    ) {
+      top = headerRect.bottom;
+    }
+    const right = validMainRect && viewportWidth > 0 ? Math.max(0, viewportWidth - mainRect.right) : 0;
+    const bottom = validMainRect && viewportHeight > 0 ? Math.max(0, viewportHeight - mainRect.bottom) : 0;
     overlay.style.left = `${left}px`;
-    overlay.style.top = "0px";
+    overlay.style.top = `${top}px`;
+    overlay.style.right = `${right}px`;
+    overlay.style.bottom = `${bottom}px`;
   }
 
   function codexPlusHostUsesLightTheme() {
@@ -4558,6 +4586,7 @@
 
   function restorePluginMarketplaceRequestParams(params, method = "") {
     if (!params || typeof params !== "object") return params;
+    if (method && method !== "list-plugins") return params;
     let next = params;
     if (Array.isArray(params.marketplaceKinds)) {
       const nextKinds = params.marketplaceKinds.map((kind) => {
@@ -4565,15 +4594,6 @@
         return restorePluginMarketplaceName(kind);
       });
       next = { ...next, marketplaceKinds: Array.from(new Set(nextKinds)) };
-    }
-    if (method === "install-plugin") {
-      next = next === params ? { ...params } : { ...next };
-      if (next.remoteMarketplaceName) next.remoteMarketplaceName = restorePluginMarketplaceName(next.remoteMarketplaceName);
-      if (typeof next.marketplacePath === "string" && next.marketplacePath.startsWith("remote:")) {
-        const remoteMarketplaceName = next.marketplacePath.slice("remote:".length);
-        delete next.marketplacePath;
-        next.remoteMarketplaceName = restorePluginMarketplaceName(remoteMarketplaceName);
-      }
     }
     return next;
   }
@@ -4669,21 +4689,27 @@
     client.__codexPluginMarketplaceOriginalSendRequest = originalSendRequest;
     client.sendRequest = async function codexPluginMarketplacePatchedSendRequest(method, params, options) {
       const requestMethod = appServerModelRequestMethod(String(method || ""), params);
+      if (requestMethod === "install-plugin") {
+        try {
+          const result = await originalSendRequest(method, params, options);
+          clearPluginMarketplaceQueryCache();
+          return result;
+        } catch (error) {
+          sendCodexPlusDiagnostic("plugin_install_request_failed", {
+            method: String(method || ""),
+            requestMethod,
+            requestMarketplacePath: params?.marketplacePath || null,
+            requestRemoteMarketplaceName: params?.remoteMarketplaceName || null,
+            requestPluginName: params?.pluginName || null,
+            errorName: error?.name || "",
+            errorMessage: error?.message || String(error),
+          });
+          throw error;
+        }
+      }
       const restoredRequestParams = restorePluginMarketplaceRequestParams(params, requestMethod);
       const requestProfile = pluginMarketplaceRequestProfile(restoredRequestParams);
       const requestParams = patchPluginMarketplaceRequestParams(requestMethod, restoredRequestParams);
-      if (requestMethod === "install-plugin") {
-        sendCodexPlusDiagnostic("plugin_install_request_debug", {
-          method: String(method || ""),
-          requestMethod,
-          originalMarketplacePath: params?.marketplacePath || null,
-          originalRemoteMarketplaceName: params?.remoteMarketplaceName || null,
-          originalPluginName: params?.pluginName || null,
-          requestMarketplacePath: requestParams?.marketplacePath || null,
-          requestRemoteMarketplaceName: requestParams?.remoteMarketplaceName || null,
-          requestPluginName: requestParams?.pluginName || null,
-        });
-      }
       try {
         const result = await originalSendRequest(method, requestParams, options);
         return patchPluginMarketplaceResult(requestMethod, result, { mergeLocal: !requestProfile.remoteOnly });
@@ -4693,17 +4719,6 @@
           return requestProfile.remoteOnly
             ? remoteOnlyPluginMarketplaceFallbackResult()
             : localPluginMarketplaceFallbackResult();
-        }
-        if (requestMethod === "install-plugin") {
-          sendCodexPlusDiagnostic("plugin_install_request_failed", {
-            method: String(method || ""),
-            requestMethod,
-            requestMarketplacePath: requestParams?.marketplacePath || null,
-            requestRemoteMarketplaceName: requestParams?.remoteMarketplaceName || null,
-            requestPluginName: requestParams?.pluginName || null,
-            errorName: error?.name || "",
-            errorMessage: error?.message || String(error),
-          });
         }
         throw error;
       }
@@ -4717,6 +4732,7 @@
     if (message.type === "fetch" && typeof message.url === "string") {
       const requestMethod = appServerModelRequestMethod(message.url, message.body);
       if (requestMethod !== "list-plugins" && requestMethod !== "install-plugin") return message;
+      if (requestMethod === "install-plugin") return message;
       let requestBody = message.body;
       let params = null;
       if (typeof requestBody === "string" && requestBody.trim()) {
@@ -4739,18 +4755,6 @@
         window.__codexPluginMarketplaceFetchRequestProfiles.set(requestId, requestProfile);
       }
       if (requestParams === params) return message;
-      if (requestMethod === "install-plugin") {
-        sendCodexPlusDiagnostic("plugin_install_request_debug", {
-          method: message.url,
-          requestMethod,
-          originalMarketplacePath: params?.marketplacePath || null,
-          originalRemoteMarketplaceName: params?.remoteMarketplaceName || null,
-          originalPluginName: params?.pluginName || null,
-          requestMarketplacePath: requestParams?.marketplacePath || null,
-          requestRemoteMarketplaceName: requestParams?.remoteMarketplaceName || null,
-          requestPluginName: requestParams?.pluginName || null,
-        });
-      }
       return {
         ...message,
         body: typeof requestBody === "string" ? JSON.stringify(requestParams) : requestParams,
@@ -4759,6 +4763,7 @@
     if (message.type === "mcp-request" && message.request && typeof message.request === "object") {
       const requestMethod = appServerModelRequestMethod(String(message.request.method || ""), message.request.params);
       if (requestMethod !== "list-plugins" && requestMethod !== "install-plugin") return message;
+      if (requestMethod === "install-plugin") return message;
       const restoredRequestParams = restorePluginMarketplaceRequestParams(message.request.params, requestMethod);
       const requestProfile = pluginMarketplaceRequestProfile(restoredRequestParams);
       const requestParams = patchPluginMarketplaceRequestParams(requestMethod, restoredRequestParams);
@@ -4770,18 +4775,6 @@
         window.__codexPluginMarketplaceRequestProfiles.set(requestId, requestProfile);
       }
       if (requestParams === message.request.params) return message;
-      if (requestMethod === "install-plugin") {
-        sendCodexPlusDiagnostic("plugin_install_request_debug", {
-          method: String(message.request.method || ""),
-          requestMethod,
-          originalMarketplacePath: message.request.params?.marketplacePath || null,
-          originalRemoteMarketplaceName: message.request.params?.remoteMarketplaceName || null,
-          originalPluginName: message.request.params?.pluginName || null,
-          requestMarketplacePath: requestParams?.marketplacePath || null,
-          requestRemoteMarketplaceName: requestParams?.remoteMarketplaceName || null,
-          requestPluginName: requestParams?.pluginName || null,
-        });
-      }
       return { ...message, request: { ...message.request, params: requestParams } };
     }
     return message;
@@ -4861,6 +4854,7 @@
   if (window.__CODEX_PLUS_TEST_PLUGIN_MARKETPLACE__) {
     window.__codexPlusPluginMarketplaceTest = {
       patchRequestParams: patchPluginMarketplaceRequestParams,
+      patchRequestClient: patchPluginMarketplaceRequestClient,
       patchRequestMessage: patchPluginMarketplaceRequestMessage,
       patchResponseData: patchPluginMarketplaceResponseData,
       remoteAuthError: pluginMarketplaceRemoteAuthError,
@@ -9082,6 +9076,7 @@
       );
     }
     installCodexPlusSidebarNavigation();
+    positionCodexPlusPage(document.querySelector(`.${codexPlusPageClass}`));
     installSessionShareImportListener();
     localizeCodexMenus();
     scheduleBackendHeartbeat();

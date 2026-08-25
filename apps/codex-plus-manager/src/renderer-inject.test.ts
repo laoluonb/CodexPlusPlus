@@ -114,6 +114,84 @@ function installRendererStyle(renderer: string) {
   return appended;
 }
 
+function positionCodexPlusPageRuntime(renderer: string) {
+  const start = renderer.indexOf("  function positionCodexPlusPage(");
+  const end = renderer.indexOf("\n  function codexPlusHostUsesLightTheme(", start);
+  assert.ok(start >= 0 && end > start, "positionCodexPlusPage not found");
+  const source = renderer.slice(start, end);
+  const style: Record<string, string> = {};
+  const overlay = {
+    style,
+    classList: { contains: (name: string) => name === "codex-plus-page-overlay" },
+  };
+  const sidebar = {
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 240, bottom: 900, width: 240, height: 900 }),
+  };
+  const main = {
+    getBoundingClientRect: () => ({ left: 240, top: 0, right: 1500, bottom: 850, width: 1260, height: 850 }),
+  };
+  const header = {
+    getBoundingClientRect: () => ({ left: 0, top: 0, right: 1600, bottom: 40, width: 1600, height: 40 }),
+  };
+  const documentValue = {
+    documentElement: { clientWidth: 1600, clientHeight: 900 },
+    querySelector(selector: string) {
+      if (selector === "aside.app-shell-left-panel") return sidebar;
+      if (selector === 'main[class*="_MainContentSurface_"]') return main;
+      if (selector === "app-header") return header;
+      return null;
+    },
+    querySelectorAll() {
+      return [];
+    },
+  };
+  const create = new Function(
+    "document",
+    "window",
+    "selectors",
+    "codexPlusPageClass",
+    `${source}\nreturn positionCodexPlusPage;`,
+  ) as (...args: unknown[]) => (node: typeof overlay) => void;
+  const position = create(
+    documentValue,
+    { innerWidth: 1600, innerHeight: 900 },
+    { appHeader: "app-header" },
+    "codex-plus-page-overlay",
+  );
+  position(overlay);
+  return style;
+}
+
+type MarketplaceTestRuntime = {
+  patchRequestClient: (client: Record<string, unknown>) => boolean;
+  patchRequestMessage: (message: Record<string, unknown>) => Record<string, unknown>;
+};
+
+function pluginMarketplaceRequestRuntime(renderer: string): MarketplaceTestRuntime {
+  const start = renderer.indexOf("  const codexPluginRemoteOnlyMarketplaceKinds = ");
+  const end = renderer.indexOf("\n  function clearPluginMarketplaceQueryCache(", start);
+  assert.ok(start >= 0 && end > start, "plugin marketplace request block not found");
+  const source = renderer.slice(start, end);
+  const windowValue: Record<string, unknown> = { __CODEX_PLUS_TEST_PLUGIN_MARKETPLACE__: true };
+  const requestMethod = (method: string) => {
+    if (/plugin[\/-]install|install-plugin/i.test(method)) return "install-plugin";
+    if (/plugin[\/-]list|list-plugins/i.test(method)) return "list-plugins";
+    return method;
+  };
+  const run = new Function(
+    "window",
+    "codexPluginUsesBroadCatalogKinds",
+    "sendCodexPlusDiagnostic",
+    "appServerModelRequestMethod",
+    "codexPlusBackendSettings",
+    "codexPluginMarketplaceUnlockVersion",
+    "clearPluginMarketplaceQueryCache",
+    source,
+  );
+  run(windowValue, () => false, () => undefined, requestMethod, {}, "16", () => undefined);
+  return windowValue.__codexPlusPluginMarketplaceTest as MarketplaceTestRuntime;
+}
+
 describe("renderer injection header compatibility", () => {
   it("adds the session copy shortcut through the native fork action", async () => {
     const renderer = await readFile(new URL("../../../assets/inject/renderer-inject.js", import.meta.url), "utf8");
@@ -186,6 +264,18 @@ describe("renderer injection header compatibility", () => {
     assert.match(renderer, /target\?\.closest\("button, a"\)\) closeCodexPlusPage\(\)/);
     assert.match(renderer, /installCodexPlusSidebarNavigation\(\);/);
     assert.match(renderer, /document\.querySelectorAll\(`#\$\{codexPlusMenuId\}/);
+  });
+
+  it("keeps the Codex++ page inside the native project surface below the top bar", async () => {
+    const renderer = await readFile(new URL("../../../assets/inject/renderer-inject.js", import.meta.url), "utf8");
+
+    assert.deepEqual(positionCodexPlusPageRuntime(renderer), {
+      left: "240px",
+      top: "40px",
+      right: "100px",
+      bottom: "50px",
+    });
+    assert.match(renderer, /positionCodexPlusPage\(document\.querySelector\(`\.\$\{codexPlusPageClass\}`\)\)/);
   });
 
   it("does not install Codex++ UI in embedded browser documents", async () => {
@@ -559,6 +649,55 @@ describe("renderer injection service tier dispatcher patch", () => {
 
 describe("renderer injection plugin marketplace patch", () => {
   const rendererPath = new URL("../../../assets/inject/renderer-inject.js", import.meta.url);
+
+  it("passes native plugin install requests through without rewriting marketplace parameters", async () => {
+    const renderer = await readFile(rendererPath, "utf8");
+    const runtime = pluginMarketplaceRequestRuntime(renderer);
+    const params = {
+      pluginName: "documents",
+      marketplacePath: "remote:openai-curated",
+      marketplaceKinds: ["codex-plus-openai-curated"],
+    };
+    let receivedParams: unknown;
+    const client = {
+      async sendRequest(_method: string, nextParams: unknown) {
+        receivedParams = nextParams;
+        return { ok: true };
+      },
+    };
+
+    assert.equal(runtime.patchRequestClient(client), true);
+    await client.sendRequest("plugin/install", params);
+    assert.equal(receivedParams, params);
+
+    const fetchMessage = {
+      type: "fetch",
+      url: "vscode://codex/plugin/install",
+      body: JSON.stringify(params),
+    };
+    const mcpMessage = {
+      type: "mcp-request",
+      request: { method: "plugin/install", params },
+    };
+    assert.equal(runtime.patchRequestMessage(fetchMessage), fetchMessage);
+    assert.equal(runtime.patchRequestMessage(mcpMessage), mcpMessage);
+    assert.match(renderer, /codexPluginMarketplaceUnlockVersion\s*=\s*"16"/);
+  });
+
+  it("continues expanding plugin list requests while install requests stay native", async () => {
+    const runtime = pluginMarketplaceRequestRuntime(await readFile(rendererPath, "utf8"));
+    const listMessage = {
+      type: "mcp-request",
+      request: { id: 1, method: "plugin/list", params: { marketplaceKinds: ["openai-curated"] } },
+    };
+
+    const patched = runtime.patchRequestMessage(listMessage);
+    assert.notEqual(patched, listMessage);
+    assert.deepEqual(
+      (patched.request as { params: { marketplaceKinds: string[] } }).params.marketplaceKinds,
+      ["openai-curated", "local", "vertical"],
+    );
+  });
 
   // issue #1960：scanDeferred() 每轮都调用这个补丁，而早退守卫只在打上补丁后才写入。
   // Codex 侧 asset 改名后这层永远成功不了，过去既不去重也不放弃，
