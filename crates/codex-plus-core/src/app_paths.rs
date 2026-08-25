@@ -105,13 +105,7 @@ fn find_latest_codex_app_dir_from_appx_package() -> Option<PathBuf> {
 
 #[cfg(windows)]
 pub(crate) fn registered_windows_packages() -> anyhow::Result<Vec<RegisteredWindowsPackage>> {
-    use std::sync::OnceLock;
-
-    static PACKAGES: OnceLock<Result<Vec<RegisteredWindowsPackage>, String>> = OnceLock::new();
-    PACKAGES
-        .get_or_init(|| query_registered_windows_packages().map_err(|error| error.to_string()))
-        .clone()
-        .map_err(anyhow::Error::msg)
+    query_registered_windows_packages()
 }
 
 #[cfg(windows)]
@@ -329,12 +323,30 @@ pub fn resolve_codex_app_dir_with_saved(
         .map(str::trim)
         .filter(|saved| !saved.is_empty())
     {
-        // 已保存路径无效（例如误选 Codex++）时回退自动探测
-        if let Some(path) = normalize_codex_app_path(Path::new(saved)) {
+        let saved_path = Path::new(saved);
+        let current_store_app = if cfg!(windows) && is_codex_store_package_dir(saved_path) {
+            find_latest_codex_app_dir_default()
+        } else {
+            None
+        };
+        if let Some(path) = resolve_saved_codex_app_dir(saved_path, current_store_app) {
             return Some(path);
         }
     }
     resolve_codex_app_dir(None)
+}
+
+pub fn resolve_saved_codex_app_dir(
+    saved_app_path: &Path,
+    current_store_app: Option<PathBuf>,
+) -> Option<PathBuf> {
+    // Store upgrades leave the previous WindowsApps directory behind on some systems.
+    // A saved Store path is only a launch hint, so prefer the package currently registered
+    // for the user while preserving explicit standalone/macOS paths.
+    if is_codex_store_package_dir(saved_app_path) {
+        return current_store_app.or_else(|| normalize_codex_app_path(saved_app_path));
+    }
+    normalize_codex_app_path(saved_app_path)
 }
 
 pub fn normalize_codex_app_path(path: &Path) -> Option<PathBuf> {

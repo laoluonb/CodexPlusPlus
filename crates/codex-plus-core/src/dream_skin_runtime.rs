@@ -522,12 +522,10 @@ async fn primary_target(debug_port: u16) -> anyhow::Result<crate::cdp::CdpTarget
 }
 
 fn platform_identity_check(configured_path: &str) -> DreamSkinCheck {
-    let configured = if configured_path.trim().is_empty() {
-        None
-    } else {
-        Some(Path::new(configured_path))
-    };
-    let Some(app_dir) = crate::app_paths::resolve_codex_app_dir(configured) else {
+    let Some(app_dir) = crate::app_paths::resolve_codex_app_dir_with_saved(
+        None,
+        Some(configured_path),
+    ) else {
         return check(
             "appIdentity",
             "官方应用身份",

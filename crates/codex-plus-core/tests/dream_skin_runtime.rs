@@ -2,7 +2,8 @@ use codex_plus_core::dream_skin_runtime::{
     DreamSkinRuntimeStatus, DreamSkinState, apply_dream_skin_live, macos_arch_name,
     parse_renderer_verification, windows_app_path_matches_registered_root,
 };
-use std::path::Path;
+use codex_plus_core::app_paths::resolve_saved_codex_app_dir;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn maps_rust_apple_silicon_arch_to_lipo_name() {
@@ -20,6 +21,25 @@ fn windows_identity_uses_native_package_api_without_powershell() {
 
     assert!(source.contains("registered_windows_packages"));
     assert!(!source.contains("Command::new(\"powershell\")"));
+}
+
+#[test]
+fn windows_package_identity_is_refreshed_after_store_updates() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/app_paths.rs"
+    ))
+    .unwrap();
+    let registered_packages = source
+        .split("pub(crate) fn registered_windows_packages")
+        .nth(1)
+        .unwrap()
+        .split("fn query_registered_windows_packages")
+        .next()
+        .unwrap();
+
+    assert!(registered_packages.contains("query_registered_windows_packages()"));
+    assert!(!registered_packages.contains("OnceLock"));
 }
 
 #[test]
@@ -148,6 +168,40 @@ fn windows_auto_detection_prefers_the_registered_store_package() {
         .find("find_latest_codex_app_dir_from_roots")
         .unwrap();
     assert!(registered < directory_fallback);
+}
+
+#[test]
+fn saved_store_path_tracks_the_current_registered_package_after_an_upgrade() {
+    let saved = Path::new(
+        r"C:\Program Files\WindowsApps\OpenAI.Codex_26.818.5229.0_x64__2p2nqsd0c76g0\app",
+    );
+    let current = PathBuf::from(
+        r"C:\Program Files\WindowsApps\OpenAI.Codex_26.818.5345.0_x64__2p2nqsd0c76g0\app",
+    );
+
+    assert_eq!(
+        resolve_saved_codex_app_dir(saved, Some(current.clone())),
+        Some(current),
+    );
+}
+
+#[test]
+fn dream_skin_identity_uses_the_saved_path_resolver() {
+    let source = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/dream_skin_runtime.rs"
+    ))
+    .unwrap();
+    let identity_check = source
+        .split("fn platform_identity_check")
+        .nth(1)
+        .unwrap()
+        .split("fn platform_identity_check_for_dir")
+        .next()
+        .unwrap();
+
+    assert!(identity_check.contains("resolve_codex_app_dir_with_saved"));
+    assert!(!identity_check.contains("resolve_codex_app_dir(configured)"));
 }
 
 #[test]
