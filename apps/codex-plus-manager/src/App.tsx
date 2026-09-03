@@ -387,7 +387,7 @@ type StepwiseGenerationMode = "auto" | "manual";
 type RelayMode = "official" | "mixedApi" | "pureApi" | "aggregate";
 type RelaySessionProvider = "custom" | "openai";
 const CHAT_UPSTREAM_BASE_URL_KEY = "codex_plus_chat_base_url";
-const SCRIPT_MARKET_REPOSITORY_URL = "https://github.com/BigPizzaV3/CodexPlusPlusScriptMarket";
+const SCRIPT_MARKET_REPOSITORY_URL = "https://github.com/laoluonb/CodexPlusPlus";
 
 const emptyContextSelection = (): RelayContextSelection => ({
   mcpServers: [],
@@ -4864,7 +4864,7 @@ function DreamSkinScreen({
                   <small>
                     {market?.updatedAt
                       ? tf("清单更新于 {0}，安装后会保存到“我的主题”。", [market.updatedAt])
-                      : t("从 CodexPlusPlus-Themes 仓库加载可安装主题。")}
+                      : t("从 Codex++ 主题仓库加载可安装主题。")}
                   </small>
                 </div>
                 <Toolbar>
@@ -4872,7 +4872,7 @@ function DreamSkinScreen({
                     <RefreshCw className="h-4 w-4" />
                     {t("刷新市场")}
                   </Button>
-                  <Button onClick={() => void actions.openExternalUrl(market?.repositoryUrl || "https://github.com/BigPizzaV3/CodexPlusPlus-Themes")} variant="outline">
+                  <Button onClick={() => void actions.openExternalUrl(market?.repositoryUrl || "https://github.com/laoluonb/CodexPlusPlus")} variant="outline">
                     <Github className="h-4 w-4" />
                     {t("投稿主题")}
                   </Button>
@@ -6305,24 +6305,24 @@ function AboutScreen({
           <div className="metric-list">
             <Metric label={t("Codex++ 版本")} value={overview?.current_version ?? update?.currentVersion ?? "-"} />
             <Metric label={t("Codex 版本")} value={overview?.codex_version ?? t("未检测到")} />
-            <Metric label={t("项目地址")} value="github.com/BigPizzaV3/CodexPlusPlus" />
+            <Metric label={t("项目地址")} value="github.com/laoluonb/CodexPlusPlus" />
           </div>
           <Toolbar>
-            <Button onClick={() => void actions.openExternalUrl("https://github.com/BigPizzaV3/CodexPlusPlus")} variant="secondary">
+            <Button onClick={() => void actions.openExternalUrl("https://github.com/laoluonb/CodexPlusPlus")} variant="secondary">
               <ExternalLink className="h-4 w-4" />
               {t("打开项目主页")}
             </Button>
-            <Button onClick={() => void actions.openExternalUrl("https://github.com/BigPizzaV3/CodexPlusPlus/issues")} variant="secondary">
+            <Button onClick={() => void actions.openExternalUrl("https://github.com/laoluonb/CodexPlusPlus/issues")} variant="secondary">
               <ExternalLink className="h-4 w-4" />
               {t("反馈问题")}
             </Button>
-            <Button onClick={() => void actions.openExternalUrl("https://discord.gg/y96kX7A76v")} variant="secondary">
+            <Button onClick={() => void actions.openExternalUrl("https://github.com/laoluonb/CodexPlusPlus/discussions")} variant="secondary">
               <MessageCircle className="h-4 w-4" />
-              Discord
+              Discussions
             </Button>
-            <Button onClick={() => void actions.openExternalUrl("https://t.me/CodexPlusPlus")} variant="secondary">
+            <Button onClick={() => void actions.openExternalUrl("https://github.com/laoluonb/CodexPlusPlus/discussions")} variant="secondary">
               <MessageCircle className="h-4 w-4" />
-              Telegram
+              社区讨论
             </Button>
           </Toolbar>
         </CardContent>

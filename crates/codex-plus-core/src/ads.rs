@@ -19,10 +19,7 @@ const DEEPKEY_SPONSOR_EXPIRES_AT: &str = "2026-08-25T23:59:59+08:00";
 const APIMART_SPONSOR_EXPIRES_AT: &str = "2026-09-27T23:59:59+08:00";
 const NEW_SPONSOR_EXPIRES_AT: &str = "2026-11-27T23:59:59+08:00";
 
-pub const DEFAULT_AD_LIST_URLS: [&str; 2] = [
-    "https://raw.githubusercontent.com/BigPizzaV3/Ad-List/main/ads.json",
-    "https://cdn.jsdelivr.net/gh/BigPizzaV3/Ad-List@main/ads.json",
-];
+pub const DEFAULT_AD_LIST_URLS: [&str; 0] = [];
 
 pub fn normalize_ad_payload(payload: Value) -> Value {
     let version = payload.get("version").and_then(Value::as_u64).unwrap_or(1);

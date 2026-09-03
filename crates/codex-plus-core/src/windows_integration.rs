@@ -606,7 +606,7 @@ fn apply_taskbar_properties(hwnd: HWND, icon_resource_path: &PathBuf) -> anyhow:
     set_property_string(
         &store,
         &PKEY_AppUserModel_ID,
-        "com.bigpizzav3.codexplusplus.codex",
+        "com.laoluonb.codexplusplus.codex",
     )?;
     set_property_string(
         &store,

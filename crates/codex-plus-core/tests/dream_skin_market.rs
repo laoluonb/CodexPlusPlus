@@ -19,7 +19,7 @@ fn market_theme(config: &[u8], image: &[u8]) -> DreamSkinMarketTheme {
         author: "Codex++".to_string(),
         description: "Test theme".to_string(),
         license: "MIT".to_string(),
-        source_url: "https://github.com/BigPizzaV3/CodexPlusPlus-Themes".to_string(),
+        source_url: "https://github.com/laoluonb/Codex-Dream-Skin".to_string(),
         tags: vec!["test".to_string()],
         theme: "themes/market-demo/theme.json".to_string(),
         image: "themes/market-demo/image.png".to_string(),
@@ -118,7 +118,7 @@ async fn rejects_hash_mismatch_before_installing_theme() {
 }
 
 #[tokio::test]
-#[ignore = "requires the public CodexPlusPlus-Themes repository"]
+#[ignore = "requires the public Codex-Dream-Skin repository"]
 async fn live_market_theme_can_be_fetched_and_installed() {
     let state = tempdir().unwrap();
     let market = load_market(state.path()).await.unwrap();
@@ -140,3 +140,4 @@ async fn live_market_theme_can_be_fetched_and_installed() {
             .is_file()
     );
 }
+

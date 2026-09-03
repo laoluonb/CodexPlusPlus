@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/github/v/release/BigPizzaV3/CodexPlusPlus">
-  <img alt="Stars" src="https://img.shields.io/github/stars/BigPizzaV3/CodexPlusPlus">
-  <img alt="License" src="https://img.shields.io/github/license/BigPizzaV3/CodexPlusPlus">
+  <img alt="Release" src="https://img.shields.io/github/v/release/laoluonb/CodexPlusPlus">
+  <img alt="Stars" src="https://img.shields.io/github/stars/laoluonb/CodexPlusPlus">
+  <img alt="License" src="https://img.shields.io/github/license/laoluonb/CodexPlusPlus">
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange">
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
@@ -20,7 +20,7 @@ Codex++ 是面向 OpenAI Codex / ChatGPT 桌面应用的外部启动器与管理
 
 ## 快速使用
 
-从 [GitHub Releases](https://github.com/BigPizzaV3/CodexPlusPlus/releases) 下载最新版安装包：
+从 [GitHub Releases](https://github.com/laoluonb/CodexPlusPlus/releases) 下载最新版安装包：
 
 - Windows：`CodexPlusPlus-*-windows-x64-setup.exe`
 - macOS Intel：`CodexPlusPlus-*-macos-x64.dmg`
@@ -39,7 +39,7 @@ Codex++ 是面向 OpenAI Codex / ChatGPT 桌面应用的外部启动器与管理
 
 <img src="docs/images/discussion-group-qr.jpg" alt="Codex++ 微信群二维码" width="260">
 
-Telegram 频道：<https://t.me/CodexPlusPlus>
+社区讨论：<https://github.com/laoluonb/CodexPlusPlus/discussions>
 
 友情链接：<a href="https://linux.do">LINUX DO</a>
 
@@ -171,7 +171,7 @@ scripts/installer/
 
 ## 开源协议
 
-Copyright (C) 2026 BigPizzaV3
+Copyright (C) 2026 laoluonb
 
 CodexPlusPlus 采用 [GNU Affero General Public License v3.0](LICENSE)，SPDX 标识为 `AGPL-3.0-only`。修改并分发本项目，或通过网络提供修改后的版本时，需要按 AGPLv3 提供对应源代码。
 

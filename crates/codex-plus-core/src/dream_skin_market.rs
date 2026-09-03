@@ -11,11 +11,11 @@ use crate::dream_skin_library::{DreamSkinThemeDraft, DreamSkinThemeSummary};
 use crate::settings::DreamSkinThemeConfig;
 
 pub const DEFAULT_MARKET_INDEX_URL: &str =
-    "https://raw.githubusercontent.com/BigPizzaV3/CodexPlusPlus-Themes/main/index.json";
+    "https://raw.githubusercontent.com/Fei-Away/Codex-Dream-Skin/main/index.json";
 pub const DEFAULT_MARKET_RAW_BASE_URL: &str =
-    "https://raw.githubusercontent.com/BigPizzaV3/CodexPlusPlus-Themes/main/";
+    "https://raw.githubusercontent.com/Fei-Away/Codex-Dream-Skin/main/";
 pub const DEFAULT_MARKET_REPOSITORY_URL: &str =
-    "https://github.com/BigPizzaV3/CodexPlusPlus-Themes";
+    "https://github.com/Fei-Away/Codex-Dream-Skin";
 
 const MARKET_CACHE_FILE: &str = "dream-skin/market/index.json";
 const MARKET_INSTALLS_FILE: &str = "dream-skin/market/installed.json";
@@ -91,8 +91,14 @@ pub async fn load_market(state_dir: &Path) -> anyhow::Result<DreamSkinMarketLoad
             })
         }
         Err(network_error) => {
-            let cached = read_cached_manifest(state_dir)
-                .with_context(|| format!("主题市场加载失败，且没有可用缓存：{network_error}"))?;
+            let cached = match read_cached_manifest(state_dir) {
+                Ok(cached) => cached,
+                Err(_) => DreamSkinMarketManifest {
+                    schema_version: 1,
+                    updated_at: String::new(),
+                    themes: Vec::new(),
+                },
+            };
             Ok(DreamSkinMarketLoad {
                 manifest: enrich_market_manifest(state_dir, cached),
                 cached: true,
@@ -240,7 +246,7 @@ fn validate_market_theme(theme: &DreamSkinMarketTheme) -> anyhow::Result<()> {
 fn market_http_client() -> anyhow::Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
         .user_agent(format!(
-            "CodexPlusPlus-Themes/{}",
+            "Codex-Dream-Skin/{}",
             env!("CARGO_PKG_VERSION")
         ))
         .connect_timeout(Duration::from_secs(8))

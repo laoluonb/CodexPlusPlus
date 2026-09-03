@@ -131,7 +131,7 @@ export const EN_PLAIN: Record<string, string> = {
   "主题视图": "Theme view",
   "社区主题": "Community themes",
   "投稿主题": "Submit theme",
-  "从 CodexPlusPlus-Themes 仓库加载可安装主题。": "Load installable themes from the CodexPlusPlus-Themes repository.",
+  "从 Codex++ 主题仓库加载可安装主题。": "Load installable themes from the Codex++ theme repository.",
   "远程仓库暂不可用，当前显示本地缓存。": "The remote repository is unavailable. Showing the local cache.",
   "正在加载主题市场…": "Loading theme marketplace…",
   "暂无主题说明。": "No theme description.",
@@ -368,8 +368,8 @@ export const EN_PLAIN: Record<string, string> = {
   "关闭后本工具不会在手动切换时写入 Codex 的 config.toml / auth.json；启动 Codex 时始终不会自动改这些文件。":
     "When off, this tool won't write Codex's config.toml / auth.json on manual switches; it never auto-modifies these files when launching Codex.",
   "兼容增强": "Compatible enhancement",
-  "内容来自 BigPizzaV3/Ad-List，分为赞助商推荐和普通推荐。":
-    "Content comes from BigPizzaV3/Ad-List, split into sponsor recommendations and regular recommendations.",
+  "内容来自本地内置推荐，分为赞助商推荐和普通推荐。":
+    "Content comes from local built-in recommendations, split into sponsor recommendations and regular recommendations.",
   "内置": "Built-in",
   "内置、手动和市场安装脚本；可在这里启停或删除用户脚本": "Built-in, manual and marketplace-installed scripts; enable, disable or delete user scripts here",
   "内置和用户自定义脚本清单": "Built-in and user-defined script inventory",

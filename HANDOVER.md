@@ -4,7 +4,7 @@
 
 ### PR #1247: guard port auto-offset for multi-user RDP
 
-**PR:** https://github.com/BigPizzaV3/CodexPlusPlus/pull/1247
+**PR:** https://github.com/laoluonb/CodexPlusPlus/pull/1247
 **Branch:** `fix/guard-port-offset` (on lennney fork)
 
 ### What was done
@@ -52,3 +52,4 @@ Resolution order:
 1. Wait for CI (run 28326773669) to complete — verify all 3 platforms green
 2. Wait for upstream maintainer review
 3. If maintainer requests changes, address them
+

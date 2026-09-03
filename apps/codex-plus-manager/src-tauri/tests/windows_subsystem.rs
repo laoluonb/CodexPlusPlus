@@ -170,10 +170,10 @@ fn macos_packager_hides_silent_launcher_but_not_manager() {
     assert!(script.contains("BINARY_DIR=\"${BINARY_DIR:-$ROOT/target/release}\""));
     assert!(script.contains("CodexPlusPlus-${VERSION}-macos-${ARCH}.dmg"));
     assert!(script.contains(
-        "create_app \"Codex++\" \"CodexPlusPlus\" \"$BINARY_DIR/codex-plus-plus\" \"com.bigpizzav3.codexplusplus\" \"true\""
+        "create_app \"Codex++\" \"CodexPlusPlus\" \"$BINARY_DIR/codex-plus-plus\" \"com.laoluonb.codexplusplus\" \"true\""
     ));
     assert!(script.contains(
-        "create_app \"Codex++ 管理工具\" \"CodexPlusPlusManager\" \"$BINARY_DIR/codex-plus-plus-manager\" \"com.bigpizzav3.codexplusplus.manager\" \"false\""
+        "create_app \"Codex++ 管理工具\" \"CodexPlusPlusManager\" \"$BINARY_DIR/codex-plus-plus-manager\" \"com.laoluonb.codexplusplus.manager\" \"false\""
     ));
 }
 
@@ -392,3 +392,4 @@ fn manager_update_install_keeps_visible_progress_bar() {
     assert!(app_tsx.contains("current.percent + 0.2"));
     assert!(app_tsx.contains("下载或启动耗时较长"));
 }
+

@@ -66,7 +66,7 @@ fn injection_script_prefixes_helper_url_and_metadata() {
     assert!(!script.contains("window.__CODEX_PLUS_SPONSOR_IMAGES__"));
     assert!(script.contains("window.__CODEX_PLUS_VERSION__"));
     assert!(script.contains(codex_plus_core::version::VERSION));
-    assert!(script.contains("https://discord.gg/y96kX7A76v"));
+    assert!(script.contains("https://github.com/laoluonb/CodexPlusPlus/discussions"));
     assert!(script.contains("data-codex-plus-discord"));
 }
 
@@ -830,7 +830,7 @@ fn injection_script_fetches_ads_without_bridge() {
     assert!(script.contains("directFetchCodexPlusAds"));
     assert!(script.contains("cacheBustCodexPlusAdUrl"));
     assert!(script.contains("Date.now()"));
-    assert!(script.contains("BigPizzaV3/Ad-List"));
+    assert!(script.contains("laoluonb/CodexPlusPlus/releases/latest/download/ads.json"));
     assert!(
         !script.contains("codexPlusAds = normalizeCodexPlusAds(await postJson(\"/ads\", {}));")
     );
@@ -4348,7 +4348,7 @@ fn pick_injectable_codex_page_target_ignores_embedded_browser_page_named_codex()
             "browser-pr",
             "page",
             "Fix Codex++ menu anchoring · Pull Request",
-            "https://github.com/BigPizzaV3/CodexPlusPlus/pull/1743",
+            "https://github.com/laoluonb/CodexPlusPlus/pull/1743",
             Some("ws://browser-pr"),
         ),
         target(
@@ -4397,7 +4397,7 @@ fn pick_injectable_codex_page_target_rejects_embedded_browser_only_page() {
         "browser-pr",
         "page",
         "Fix Codex++ menu anchoring · Pull Request",
-        "https://github.com/BigPizzaV3/CodexPlusPlus/pull/1743",
+        "https://github.com/laoluonb/CodexPlusPlus/pull/1743",
         Some("ws://browser-pr"),
     )];
 
@@ -5489,3 +5489,4 @@ fn noop_handler() -> bridge::BridgeHandler {
             as Pin<Box<dyn Future<Output = anyhow::Result<serde_json::Value>> + Send>>
     })
 }
+

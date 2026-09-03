@@ -156,8 +156,8 @@ verify_app() {
 
 prepare_icon
 prepare_background
-create_app "Codex++" "CodexPlusPlus" "$BINARY_DIR/codex-plus-plus" "com.bigpizzav3.codexplusplus" "true"
-create_app "Codex++ 管理工具" "CodexPlusPlusManager" "$BINARY_DIR/codex-plus-plus-manager" "com.bigpizzav3.codexplusplus.manager" "false"
+create_app "Codex++" "CodexPlusPlus" "$BINARY_DIR/codex-plus-plus" "com.laoluonb.codexplusplus" "true"
+create_app "Codex++ 管理工具" "CodexPlusPlusManager" "$BINARY_DIR/codex-plus-plus-manager" "com.laoluonb.codexplusplus.manager" "false"
 
 sign_app "$STAGE/Codex++.app"
 sign_app "$STAGE/Codex++ 管理工具.app"

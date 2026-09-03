@@ -9,9 +9,9 @@
 </p>
 
 <p align="center">
-  <img alt="Release" src="https://img.shields.io/github/v/release/BigPizzaV3/CodexPlusPlus">
-  <img alt="Stars" src="https://img.shields.io/github/stars/BigPizzaV3/CodexPlusPlus">
-  <img alt="License" src="https://img.shields.io/github/license/BigPizzaV3/CodexPlusPlus">
+  <img alt="Release" src="https://img.shields.io/github/v/release/laoluonb/CodexPlusPlus">
+  <img alt="Stars" src="https://img.shields.io/github/stars/laoluonb/CodexPlusPlus">
+  <img alt="License" src="https://img.shields.io/github/license/laoluonb/CodexPlusPlus">
   <img alt="Rust" src="https://img.shields.io/badge/rust-1.85%2B-orange">
   <img alt="Tauri" src="https://img.shields.io/badge/tauri-2.x-24C8DB">
 </p>
@@ -20,7 +20,7 @@ Codex++ is an external launcher and manager for the OpenAI Codex / ChatGPT deskt
 
 ## Quick Start
 
-Download the latest installer from [GitHub Releases](https://github.com/BigPizzaV3/CodexPlusPlus/releases):
+Download the latest installer from [GitHub Releases](https://github.com/laoluonb/CodexPlusPlus/releases):
 
 - Windows: `CodexPlusPlus-*-windows-x64-setup.exe`
 - macOS Intel: `CodexPlusPlus-*-macos-x64.dmg`
@@ -41,7 +41,7 @@ WeChat: <a href="https://docs.qq.com/doc/DQ2VOanZTTFZJcUpZ#">get the latest grou
 
 <img src="docs/images/discussion-group-qr.jpg" alt="Codex++ WeChat group QR code" width="260">
 
-Telegram: <https://t.me/CodexPlusPlus>
+Community discussions: <https://github.com/laoluonb/CodexPlusPlus/discussions>
 
 Friendly link: <a href="https://linux.do">LINUX DO</a>
 
@@ -160,7 +160,7 @@ scripts/installer/
 
 ## License
 
-Copyright (C) 2026 BigPizzaV3
+Copyright (C) 2026 laoluonb
 
 CodexPlusPlus is licensed under the [GNU Affero General Public License v3.0](LICENSE), SPDX identifier `AGPL-3.0-only`. Modified versions that are distributed or offered to users over a network must provide the corresponding source code as required by AGPLv3.
 
