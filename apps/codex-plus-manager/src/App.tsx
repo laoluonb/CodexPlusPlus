@@ -140,6 +140,7 @@ import { vlmTestTranslation } from "./vlm-test-translation";
 const isWindowsPlatform = /\bWindows\b/i.test(navigator.userAgent);
 const dreamSkinWindowsPreviewUrl = new URL("../../../assets/inject/upstream/dream-skin/windows/dream-reference.jpg", import.meta.url).href;
 const dreamSkinMacPreviewUrl = new URL("../../../assets/inject/upstream/dream-skin/macos/portal-hero.png", import.meta.url).href;
+const dreamSkinThemePageSize = 6;
 const dreamSkinCompanionDataUrlLimit = 240_000;
 const dreamSkinCompanionMimeTypes = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
@@ -4631,6 +4632,8 @@ function DreamSkinScreen({
   actions: Actions;
 }) {
   const [themeView, setThemeView] = useState<"market" | "community" | "local">("community");
+  const [marketPage, setMarketPage] = useState(1);
+  const [localPage, setLocalPage] = useState(1);
   const companionInputRef = useRef<HTMLInputElement>(null);
   const [companionError, setCompanionError] = useState("");
   const masterEnabled = form.enhancementsEnabled;
@@ -4711,6 +4714,25 @@ function DreamSkinScreen({
   const stateLabel = dreamSkinStateLabel(status?.state ?? "not_running");
   const runtimeChecks = status?.checks ?? [];
   const verificationChecks = verification?.checks ?? [];
+  const marketPageCount = Math.max(1, Math.ceil((market?.themes.length ?? 0) / dreamSkinThemePageSize));
+  const currentMarketPage = Math.min(marketPage, marketPageCount);
+  const visibleMarketThemes = (market?.themes ?? []).slice(
+    (currentMarketPage - 1) * dreamSkinThemePageSize,
+    currentMarketPage * dreamSkinThemePageSize,
+  );
+  const localPageCount = Math.max(1, Math.ceil((library?.themes.length ?? 0) / dreamSkinThemePageSize));
+  const currentLocalPage = Math.min(localPage, localPageCount);
+  const visibleLocalThemes = (library?.themes ?? []).slice(
+    (currentLocalPage - 1) * dreamSkinThemePageSize,
+    currentLocalPage * dreamSkinThemePageSize,
+  );
+
+  useEffect(() => {
+    setMarketPage((current) => Math.min(current, marketPageCount));
+  }, [marketPageCount]);
+  useEffect(() => {
+    setLocalPage((current) => Math.min(current, localPageCount));
+  }, [localPageCount]);
 
   return (
     <>
@@ -4863,16 +4885,19 @@ function DreamSkinScreen({
                 </div>
               ) : null}
               {market?.themes.length ? (
-                <div className="dream-skin-market-grid">
-                  {market.themes.map((item) => (
-                    <DreamSkinMarketCard
-                      actions={actions}
-                      key={item.id}
-                      onInstalled={() => setThemeView("local")}
-                      theme={item}
-                    />
-                  ))}
-                </div>
+                <>
+                  <div className="dream-skin-market-grid">
+                    {visibleMarketThemes.map((item) => (
+                      <DreamSkinMarketCard
+                        actions={actions}
+                        key={item.id}
+                        onInstalled={() => setThemeView("local")}
+                        theme={item}
+                      />
+                    ))}
+                  </div>
+                  <DreamSkinPagination onPageChange={setMarketPage} page={currentMarketPage} pageCount={marketPageCount} />
+                </>
               ) : (
                 <div className="empty">
                   {market?.status === "failed" ? market.message : t("正在加载主题市场…")}
@@ -4907,7 +4932,7 @@ function DreamSkinScreen({
               </Toolbar>
             </div>
             <div className="dream-skin-theme-list">
-              {(library?.themes ?? []).map((item) => {
+              {visibleLocalThemes.map((item) => {
                 const cardPreview = item.previewPath
                   ? convertFileSrc(item.previewPath)
                   : isWindowsPlatform
@@ -4968,6 +4993,7 @@ function DreamSkinScreen({
                 );
               })}
             </div>
+            <DreamSkinPagination onPageChange={setLocalPage} page={currentLocalPage} pageCount={localPageCount} />
             {!library ? <p className="empty">{t("正在加载主题库…")}</p> : null}
           </section>
 
@@ -5335,6 +5361,7 @@ function DreamSkinCommunitySection({
 }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<"latest" | "popular" | "name">("latest");
+  const [page, setPage] = useState(1);
   const items = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     const filtered = (community?.items ?? []).filter((item) => {
@@ -5348,6 +5375,16 @@ function DreamSkinCommunitySection({
       return right.reviewedAt.localeCompare(left.reviewedAt);
     });
   }, [community?.items, query, sort]);
+  const pageCount = Math.max(1, Math.ceil(items.length / dreamSkinThemePageSize));
+  const currentPage = Math.min(page, pageCount);
+  const visibleItems = items.slice(
+    (currentPage - 1) * dreamSkinThemePageSize,
+    currentPage * dreamSkinThemePageSize,
+  );
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
 
   return (
     <section className="dream-skin-community">
@@ -5384,12 +5421,18 @@ function DreamSkinCommunitySection({
       <div className="dream-skin-community-controls">
         <Input
           aria-label={t("搜索社区主题")}
-          onChange={(event) => setQuery(event.currentTarget.value)}
+          onChange={(event) => {
+            setQuery(event.currentTarget.value);
+            setPage(1);
+          }}
           placeholder={t("搜索主题名称、作者或许可证")}
           value={query}
         />
         <AppSelect
-          onChange={(value) => setSort(value as typeof sort)}
+          onChange={(value) => {
+            setSort(value as typeof sort);
+            setPage(1);
+          }}
           options={[
             { value: "latest", label: t("最新审核") },
             { value: "popular", label: t("下载最多") },
@@ -5400,16 +5443,19 @@ function DreamSkinCommunitySection({
         />
       </div>
       {items.length ? (
-        <div className="dream-skin-community-grid">
-          {items.map((item) => (
-            <DreamSkinCommunityCard
-              actions={actions}
-              key={item.id}
-              onInstalled={onInstalled}
-              theme={item}
-            />
-          ))}
-        </div>
+        <>
+          <div className="dream-skin-community-grid">
+            {visibleItems.map((item) => (
+              <DreamSkinCommunityCard
+                actions={actions}
+                key={item.id}
+                onInstalled={onInstalled}
+                theme={item}
+              />
+            ))}
+          </div>
+          <DreamSkinPagination onPageChange={setPage} page={currentPage} pageCount={pageCount} />
+        </>
       ) : (
         <div className="empty">
           {!community
@@ -5422,6 +5468,29 @@ function DreamSkinCommunitySection({
         </div>
       )}
     </section>
+  );
+}
+
+function DreamSkinPagination({
+  page,
+  pageCount,
+  onPageChange,
+}: {
+  page: number;
+  pageCount: number;
+  onPageChange: (page: number) => void;
+}) {
+  if (pageCount <= 1) return null;
+  return (
+    <nav aria-label={t("主题分页")} className="dream-skin-pagination">
+      <Button aria-label={t("上一页")} disabled={page <= 1} onClick={() => onPageChange(page - 1)} size="icon" title={t("上一页")} variant="outline">
+        <ArrowLeft className="h-4 w-4" />
+      </Button>
+      <span>{tf("第 {0} / {1} 页", [page, pageCount])}</span>
+      <Button aria-label={t("下一页")} disabled={page >= pageCount} onClick={() => onPageChange(page + 1)} size="icon" title={t("下一页")} variant="outline">
+        <ArrowRight className="h-4 w-4" />
+      </Button>
+    </nav>
   );
 }
 

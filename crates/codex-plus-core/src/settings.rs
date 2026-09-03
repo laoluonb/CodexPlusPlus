@@ -1640,6 +1640,9 @@ fn normalize_settings_config_sections(mut settings: BackendSettings) -> BackendS
         normalize_image_overlay_fit_mode(&settings.codex_app_image_overlay_fit_mode);
     settings.codex_app_dream_skin_theme =
         normalize_dream_skin_theme(&settings.codex_app_dream_skin_theme);
+    for key in ["promoTitle", "promoSub", "promoUrl"] {
+        settings.codex_app_dream_skin_theme_config.extra_fields.remove(key);
+    }
     if settings.codex_app_dream_skin_theme_config == DreamSkinThemeConfig::default()
         && settings.codex_app_dream_skin_theme != default_dream_skin_theme()
     {

@@ -36,6 +36,7 @@ export type DreamSkinThemeConfig = {
     accent?: string;
     [key: string]: unknown;
   };
+  // Legacy fields are accepted for backwards compatibility but never rendered.
   promoTitle?: string;
   promoSub?: string;
   promoUrl?: string;
@@ -241,9 +242,6 @@ export function defaultDreamSkinTheme(): DreamSkinThemeConfig {
     quote: "Make something wonderful",
     colors: defaultDreamSkinColors(),
     image: "portal-hero.png",
-    promoTitle: "感谢 Passion8 赞助",
-    promoSub: "passion8.cc",
-    promoUrl: "https://passion8.cc/register?aff=TuPe",
   };
 }
 
@@ -308,6 +306,9 @@ export function normalizeDreamSkinTheme(
   } else {
     delete normalized.stylePreset;
   }
+  delete normalized.promoTitle;
+  delete normalized.promoSub;
+  delete normalized.promoUrl;
   if (colors) {
     normalized.colors = {
       ...colors,

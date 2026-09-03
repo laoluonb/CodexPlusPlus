@@ -7169,6 +7169,21 @@ select {
   display: block;
 }
 
+.dream-skin-pagination {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+.dream-skin-pagination > span {
+  color: var(--muted-foreground);
+  font-size: 12px;
+  min-width: 88px;
+  text-align: center;
+}
+
 .dream-skin-verification-meta small {
   color: hsl(var(--muted-foreground));
   font-size: 11px;

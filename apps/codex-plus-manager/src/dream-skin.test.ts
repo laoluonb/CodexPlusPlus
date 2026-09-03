@@ -53,7 +53,7 @@ describe("dream skin theme helpers", () => {
     assert.match(renderer, /__CODEX_PLUS_CLEAR_DREAM_SKIN__/);
   });
 
-  it("preserves target-only theme fields without rewriting them", () => {
+  it("preserves target-only theme fields while removing promotions", () => {
     const theme = normalizeDreamSkinTheme({
       schemaVersion: 1,
       id: "target-theme",
@@ -87,6 +87,9 @@ describe("dream skin theme helpers", () => {
       width: 96,
       side: "right",
     });
+    assert.equal(theme.promoTitle, undefined);
+    assert.equal(theme.promoSub, undefined);
+    assert.equal(theme.promoUrl, undefined);
     assert.deepEqual(theme.customTargetField, { nested: true });
   });
 
@@ -116,32 +119,7 @@ describe("dream skin theme helpers", () => {
     assert.match(app, /Math\.max\(-160, Math\.min\(160, Number\(event\.currentTarget\.value\) \|\| 0\)\)/);
   });
 
-  it("keeps the Windows skin active when the sidebar is hidden", async () => {
-    const renderer = await readFile(
-      new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url),
-      "utf8",
-    );
-    const compatibility = await readFile(
-      new URL("../../../assets/inject/renderer-inject.js", import.meta.url),
-      "utf8",
-    );
-    const assets = await readFile(
-      new URL("../../../crates/codex-plus-core/src/assets.rs", import.meta.url),
-      "utf8",
-    );
-
-    assert.match(renderer, /const ensureShellMain = \(\) =>/);
-    assert.match(renderer, /main\[class\*="MainContentSurface"\]/);
-    assert.match(renderer, /data-codex-plus-dream-surface/);
-    assert.doesNotMatch(renderer, /!shellMain\s*\|\|\s*!shellSidebar/);
-    assert.match(compatibility, /main\[class\*="_MainContentSurface_"\]/);
-    assert.match(compatibility, /shellMain\.classList\.add\("main-surface"\)/);
-    assert.match(compatibility, /data-codex-plus-dream-skin-main-surface/);
-    assert.match(compatibility, /clearDreamSkinMainSurfaceCompatibility\(\)/);
-    assert.match(assets, /DREAM_SKIN_RENDERER_REVISION: &str = "20-modern-main-surface"/);
-  });
-
-  it("extends the Windows wallpaper treatment to right and bottom dock panels", async () => {
+  it("uses the official 1.5.16 renderer and selector contract", async () => {
     const renderer = await readFile(
       new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url),
       "utf8",
@@ -151,33 +129,20 @@ describe("dream skin theme helpers", () => {
       "utf8",
     );
 
-    assert.match(renderer, /\[data-app-shell-tabs="true"\]/);
-    assert.match(renderer, /dream-aux-panel-layer/);
-    assert.match(renderer, /dream-aux-panel-right/);
-    assert.match(renderer, /dream-aux-panel-bottom/);
-    assert.match(renderer, /clearAuxiliaryPanelClasses/);
-    assert.match(css, /\.dream-aux-panel-layer/);
-    assert.match(css, /\.dream-aux-panel-right/);
-    assert.match(css, /\.dream-aux-panel-bottom/);
-    assert.match(css, /\[data-codex-terminal="true"\]/);
+    assert.match(renderer, /codex-dream-skin-selectors\/1/);
+    assert.match(renderer, /__DREAM_SKIN_CSS_JSON__/);
+    assert.match(renderer, /data-dream-skin/);
+    assert.match(css, /html\[data-dream-skin="active"\]/);
+    assert.doesNotMatch(renderer, /dream-aux-panel-layer/);
   });
 
-  it("keeps transient new-chat drafts on native geometry", async () => {
-    const renderer = await readFile(
-      new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url),
-      "utf8",
-    );
-    const css = await readFile(
-      new URL("../../../assets/inject/upstream/dream-skin/windows/dream-skin.css", import.meta.url),
-      "utf8",
-    );
-
-    assert.match(renderer, /homeHasClassicChrome/);
-    assert.match(renderer, /data-dream-home-layout/);
-    assert.match(renderer, /data-dream-home-layout.*soft/);
-    assert.match(css, /data-dream-home-layout.*structured/);
-    assert.match(css, /overflow-y: auto !important/);
-    assert.match(css, /\.composer-surface-chrome/);
+  it("shows at most six themes per Dream Skin page", async () => {
+    const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
+    assert.match(app, /const dreamSkinThemePageSize = 6/);
+    assert.match(app, /visibleMarketThemes/);
+    assert.match(app, /visibleLocalThemes/);
+    assert.match(app, /visibleItems/);
+    assert.match(app, /function DreamSkinPagination/);
   });
 
   it("exposes companion image controls in the theme editor", async () => {
