@@ -8,11 +8,8 @@ use codex_plus_core::ads::{
 use serde_json::json;
 
 #[test]
-fn default_ad_urls_match_legacy_helper_sources() {
-    assert_eq!(
-        DEFAULT_AD_LIST_URLS,
-        []
-    );
+fn default_ad_urls_are_disabled() {
+    assert!(DEFAULT_AD_LIST_URLS.is_empty());
 }
 
 #[test]
