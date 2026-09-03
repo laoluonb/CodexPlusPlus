@@ -40,4 +40,13 @@ test("DeepSeek preset uses the official Responses integration", () => {
   assert.equal(preset.model, "deepseek-v4-flash");
   assert.deepEqual(preset.modelList, ["deepseek-v4-flash", "deepseek-v4-pro"]);
 });
+
+test("TorchAI preset includes the image-capable model list", () => {
+  const preset = PRESETS.find((candidate) => candidate.id === "torchai");
+  assert.ok(preset);
+  assert.equal(preset.baseUrl, "https://torchai.ai/v1");
+  assert.equal(preset.protocol, "responses");
+  assert.equal(preset.model, "gpt-5.6-sol");
+  assert.deepEqual(preset.modelList, ["gpt-5.6-sol", "codex-auto-review", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-terra"]);
+});
 });

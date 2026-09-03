@@ -4,6 +4,13 @@ pub fn default_codex_home_dir() -> PathBuf {
     std::env::var_os("CODEX_HOME")
         .map(PathBuf::from)
         .filter(|path| codex_home_env_dir_is_valid(path))
+        .or_else(|| {
+            crate::settings::SettingsStore::default()
+                .load()
+                .ok()
+                .map(|settings| PathBuf::from(settings.codex_home_path))
+                .filter(|path| codex_home_env_dir_is_valid(path))
+        })
         .unwrap_or_else(default_user_codex_home_dir)
 }
 

@@ -512,7 +512,7 @@ impl BridgeRuntimeService for CoreRuntimeService {
     }
 
     async fn ads(&self) -> anyhow::Result<Value> {
-        crate::ads::fetch_ad_list().await
+        Ok(json!({ "version": 1, "ads": [] }))
     }
 
     async fn zed_remote_status(&self) -> anyhow::Result<Value> {

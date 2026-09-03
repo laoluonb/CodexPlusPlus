@@ -223,6 +223,8 @@ type RemotePluginMarketplaceResult = CommandResult<{
 }>;
 
 type BackendSettings = {
+  codexHomePath: string;
+  workspacesPath: string;
   codexAppPath: string;
   codexExtraArgs: string[];
   providerSyncEnabled: boolean;
@@ -893,7 +895,6 @@ const routes: Array<{ id: Route; label: string; icon: LucideIcon; badge?: string
   { id: "dreamSkin", label: t("皮肤管理"), icon: Palette },
   { id: "zedRemote", label: t("Zed 远程项目"), icon: ExternalLink },
   { id: "userScripts", label: t("脚本市场"), icon: FileCode2 },
-  { id: "recommendations", label: t("推荐内容"), icon: ExternalLink },
   { id: "maintenance", label: t("安装维护"), icon: Wrench },
   { id: "about", label: t("关于"), icon: Info },
   { id: "settings", label: t("设置"), icon: Settings },
@@ -911,12 +912,14 @@ const navigationSections: Array<{ label: string; routes: Route[]; placement?: "b
   },
   {
     label: t("系统"),
-    routes: ["recommendations", "maintenance", "about", "settings"],
+    routes: ["maintenance", "about", "settings"],
     placement: "bottom",
   },
 ];
 
 const defaultSettings: BackendSettings = {
+  codexHomePath: "",
+  workspacesPath: "",
   codexAppPath: "",
   codexExtraArgs: [],
   providerSyncEnabled: false,
@@ -1975,7 +1978,6 @@ export function App() {
       await refreshScriptMarket(true);
       await refreshUserScriptInventory();
     }
-    if (next === "recommendations") await refreshAds(true);
     if (next === "about") {
       await refreshOverview(true);
       await refreshLogs(true);
@@ -6400,6 +6402,18 @@ function SettingsScreen({
       <Panel>
         <CardHead title={t("基础设置")} detail={settings?.settings_path ?? ""} />
         <CardContent className="settings-content">
+          <div className="settings-block">
+            <div className="section-title">{t("数据位置")}</div>
+            <div className="form-row">
+              <Field label={t("Codex .codex 目录")}>
+                <Input value={form.codexHomePath} onChange={(event) => onFormChange({ ...form, codexHomePath: event.currentTarget.value })} placeholder={t("留空使用默认 ~/.codex")} />
+              </Field>
+              <Field label={t("Workspaces 目录")}>
+                <Input value={form.workspacesPath} onChange={(event) => onFormChange({ ...form, workspacesPath: event.currentTarget.value })} placeholder={t("留空使用默认工作区位置")} />
+              </Field>
+            </div>
+            <span className="field-hint">{t("保存后重启 Codex++，新的 Codex 数据和工作区将使用这些目录。")}</span>
+          </div>
           <div className="theme-row">
             <div>
               <strong>{t("界面主题")}</strong>
@@ -9425,7 +9439,7 @@ function routeSubtitle(route: Route) {
     dreamSkin: t("Codex-Dream-Skin 风格主题和换图"),
     zedRemote: t("管理 Codex SSH 项目并加入 Zed workspace"),
     userScripts: t("内置和用户自定义脚本清单"),
-    recommendations: t("赞助商推荐与普通推荐"),
+    recommendations: t("推荐内容已禁用"),
     maintenance: t("入口安装、修复、Watcher 与手动启动"),
     about: t("版本信息、项目链接、GitHub Release 更新、日志与诊断"),
     settings: t("主题和启动参数"),

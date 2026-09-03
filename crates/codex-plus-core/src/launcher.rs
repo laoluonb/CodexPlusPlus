@@ -918,6 +918,12 @@ impl LaunchHooks for DefaultLaunchHooks {
             .args(&command[1..])
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        if !settings.codex_home_path.trim().is_empty() {
+            child_command.env("CODEX_HOME", settings.codex_home_path.trim());
+        }
+        if !settings.workspaces_path.trim().is_empty() {
+            child_command.env("CODEX_WORKSPACES_PATH", settings.workspaces_path.trim());
+        }
         #[cfg(windows)]
         child_command.creation_flags(crate::windows_integration::CREATE_NO_WINDOW);
         let child = child_command

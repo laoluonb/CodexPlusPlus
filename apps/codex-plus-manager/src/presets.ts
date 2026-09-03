@@ -171,6 +171,16 @@ export const PRESETS: ProviderPreset[] = [
     modelList: ["LongCat-Flash-Chat"],
     websiteUrl: "https://longcat.chat/platform",
   },
+  {
+    id: "torchai",
+    name: "TorchAI",
+    category: "aggregator",
+    baseUrl: "https://torchai.ai/v1",
+    protocol: "responses",
+    model: "gpt-5.6-sol",
+    modelList: ["gpt-5.6-sol", "codex-auto-review", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-terra"],
+    websiteUrl: "https://torchai.ai",
+  },
 
   // ── 聚合/中转 ──
   {

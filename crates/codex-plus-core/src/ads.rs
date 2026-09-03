@@ -233,6 +233,7 @@ fn base64_encode(bytes: &[u8]) -> String {
 }
 
 pub async fn fetch_ad_list() -> anyhow::Result<Value> {
+    return Ok(json!({ "version": 1, "ads": [] }));
     fetch_ad_list_from_urls(&DEFAULT_AD_LIST_URLS).await
 }
 

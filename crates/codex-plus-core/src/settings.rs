@@ -336,18 +336,6 @@ impl Default for DreamSkinThemeConfig {
                 "image".to_string(),
                 Value::String("portal-hero.png".to_string()),
             );
-            extra_fields.insert(
-                "promoTitle".to_string(),
-                Value::String("感谢 Passion8 赞助".to_string()),
-            );
-            extra_fields.insert(
-                "promoSub".to_string(),
-                Value::String("passion8.cc".to_string()),
-            );
-            extra_fields.insert(
-                "promoUrl".to_string(),
-                Value::String("https://passion8.cc/register?aff=TuPe".to_string()),
-            );
         }
         Self {
             schema_version: default_dream_skin_schema_version(),
@@ -372,6 +360,10 @@ impl Default for DreamSkinThemeConfig {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct BackendSettings {
+    #[serde(rename = "codexHomePath", default)]
+    pub codex_home_path: String,
+    #[serde(rename = "workspacesPath", default)]
+    pub workspaces_path: String,
     #[serde(rename = "codexAppPath", default)]
     pub codex_app_path: String,
     #[serde(rename = "codexExtraArgs", default)]
@@ -565,6 +557,8 @@ pub struct BackendSettings {
 impl Default for BackendSettings {
     fn default() -> Self {
         Self {
+            codex_home_path: String::new(),
+            workspaces_path: String::new(),
             codex_app_path: String::new(),
             codex_extra_args: Vec::new(),
             provider_sync_enabled: false,
@@ -1208,6 +1202,11 @@ impl SettingsStore {
 fn merge_known_setting_fields(target: &mut Map<String, Value>, source: &Map<String, Value>) {
     target.remove("codexAppPluginAutoExpand");
     target.remove("computerUseGuardEnabled");
+    for key in ["codexHomePath", "workspacesPath"] {
+        if let Some(value) = source.get(key).and_then(Value::as_str) {
+            target.insert(key.to_string(), Value::String(value.trim().to_string()));
+        }
+    }
     if let Some(value) = source.get("codexAppPath").and_then(Value::as_str) {
         target.insert("codexAppPath".to_string(), Value::String(value.to_string()));
     }
@@ -1619,6 +1618,8 @@ fn settings_to_object(settings: &BackendSettings) -> Map<String, Value> {
 }
 
 fn normalize_settings_config_sections(mut settings: BackendSettings) -> BackendSettings {
+    settings.codex_home_path = settings.codex_home_path.trim().to_string();
+    settings.workspaces_path = settings.workspaces_path.trim().to_string();
     settings.ccs_db_path = settings.ccs_db_path.trim().to_string();
     let (common, extracted_context) =
         split_context_config_sections(&settings.relay_common_config_contents);
