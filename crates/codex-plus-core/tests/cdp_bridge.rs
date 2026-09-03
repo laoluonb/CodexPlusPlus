@@ -704,16 +704,14 @@ fn injection_script_installs_dream_skin_from_backend_settings() {
     assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__"));
     assert!(script.contains("const VERSION = \"1.5.16\";"));
     assert!(script.contains("data-dream-skin"));
+    assert!(script.contains("setAttribute(root, \"data-dream-skin\", \"active\")"));
     assert!(script.contains("styleMode"));
     assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_PAYLOAD_SIGNATURE__"));
     assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_THEME__"));
     assert!(script.contains("data:image/webp;base64,UklGRg=="));
     assert!(script.contains("codex-dream-skin-companion"));
     assert!(script.contains("removeDreamSkinCompanion"));
-    if cfg!(windows) {
-        assert!(script.contains(":root.codex-dream-skin"));
-        assert!(!script.contains("薛凯琪专属定制皮肤"));
-    }
+    assert!(!script.contains("薛凯琪专属定制皮肤"));
     assert!(script.contains(".group\\\\/home-suggestions"));
     assert!(script.contains("--dream-skin-art"));
     assert!(script.contains("--dream-art"));
@@ -825,16 +823,13 @@ fn injection_script_marks_diagnostic_build_and_reports_script_loaded() {
 }
 
 #[test]
-fn injection_script_fetches_ads_without_bridge() {
+fn injection_script_does_not_fetch_ads_without_bridge() {
     let script = assets::injection_script(57321);
 
-    assert!(script.contains("directFetchCodexPlusAds"));
-    assert!(script.contains("cacheBustCodexPlusAdUrl"));
-    assert!(script.contains("Date.now()"));
-    assert!(script.contains("laoluonb/CodexPlusPlus/releases/latest/download/ads.json"));
-    assert!(
-        !script.contains("codexPlusAds = normalizeCodexPlusAds(await postJson(\"/ads\", {}));")
-    );
+    assert!(!script.contains("directFetchCodexPlusAds"));
+    assert!(!script.contains("cacheBustCodexPlusAdUrl"));
+    assert!(!script.contains("releases/latest/download/ads.json"));
+    assert!(!script.contains("normalizeCodexPlusAds(await postJson(\"/ads\", {}))"));
 }
 
 #[test]
