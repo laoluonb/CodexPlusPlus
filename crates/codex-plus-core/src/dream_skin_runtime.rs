@@ -109,23 +109,22 @@ pub fn parse_renderer_verification(raw: Value) -> anyhow::Result<DreamSkinVerifi
         .and_then(Value::as_str)
         .map(ToString::to_string);
     let style = bool_at(&raw, "/stylePresent");
-    let chrome = bool_at(&raw, "/chromePresent")
-        && raw.get("chromePointerEvents").and_then(Value::as_str) == Some("none");
     let sidebar = bool_at(&raw, "/sidebar/visible");
     let composer = bool_at(&raw, "/composer/visible");
     let no_horizontal_overflow = !bool_at(&raw, "/documentOverflow/x");
     let no_vertical_overflow = !bool_at(&raw, "/documentOverflow/y");
     let home_route = bool_at(&raw, "/homeRoute");
     let home_pass = !home_route
-        || (bool_at(&raw, "/homePresent")
-            && bool_at(&raw, "/hero/visible")
-            && raw
-                .get("visibleCardCount")
-                .and_then(Value::as_u64)
-                .is_some_and(|count| (1..=6).contains(&count)));
+        || (bool_at(&raw, "/homePresent") && bool_at(&raw, "/hero/visible"));
     let version_pass = version
         .as_deref()
-        .is_some_and(|value| value.starts_with("codex-plus:"));
+        .is_some_and(|value| {
+            value.starts_with("codex-plus:")
+                || value
+                    .chars()
+                    .next()
+                    .is_some_and(|ch| ch.is_ascii_digit())
+        });
 
     let mut checks = vec![
         bool_check(
@@ -139,8 +138,8 @@ pub fn parse_renderer_verification(raw: Value) -> anyhow::Result<DreamSkinVerifi
             "version",
             "注入版本",
             version_pass,
-            "Codex++ 皮肤版本有效。",
-            "注入版本不是 Codex++ Dream Skin。",
+            "原版 Dream Skin 或兼容皮肤版本有效。",
+            "没有读取到有效的 Dream Skin 版本。",
         ),
         bool_check(
             "style",
@@ -148,13 +147,6 @@ pub fn parse_renderer_verification(raw: Value) -> anyhow::Result<DreamSkinVerifi
             style,
             "目标项目样式已安装。",
             "目标项目样式缺失。",
-        ),
-        bool_check(
-            "chrome",
-            "装饰层",
-            chrome,
-            "装饰层存在且不拦截点击。",
-            "装饰层缺失或会拦截点击。",
         ),
         bool_check(
             "sidebar",
@@ -174,8 +166,8 @@ pub fn parse_renderer_verification(raw: Value) -> anyhow::Result<DreamSkinVerifi
             "home",
             "首页内容",
             home_pass,
-            "首页横幅和建议卡正常。",
-            "首页横幅或建议卡不符合目标项目要求。",
+            "原版首页区域正常。",
+            "原版首页区域没有正确挂载。",
         ),
         bool_check(
             "overflow",
@@ -406,31 +398,42 @@ pub fn renderer_verification_script() -> &'static str {
       visible: rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden",
     };
   };
+  const state = window.__CODEX_DREAM_SKIN_STATE__ ||
+    window.__CODEX_GLASS_VISION_SKIN_STATE__ || null;
+  const root = document.documentElement;
   const homeSignal = document.querySelector('[data-testid="home-icon"]') ||
     document.querySelector('[data-feature="game-source"]') ||
     document.querySelector('.group\\/home-suggestions');
   const homeRoute = homeSignal?.closest('[role="main"]') || null;
-  const home = document.querySelector('[role="main"].dream-home, [role="main"].dream-skin-home, [role="main"].glass-vision-home');
+  const home = document.querySelector('[data-ds-part="home"]') || homeRoute ||
+    document.querySelector('[role="main"].dream-home, [role="main"].dream-skin-home, [role="main"].glass-vision-home');
   const suggestions = home?.querySelector('.group\\/home-suggestions') || null;
   const cards = suggestions ? [...suggestions.querySelectorAll('button')].map(box) : [];
-  const chrome = document.getElementById('codex-dream-skin-chrome') ||
-    document.getElementById('codex-glass-vision-skin-chrome');
+  const registeredSheets = window.__CODEX_DREAM_SKIN_STYLE_SHEETS__;
+  const adoptedStylePresent = state?.styleMode === 'adopted' && Boolean(
+    state.styleSheet && [...(document.adoptedStyleSheets || [])].includes(state.styleSheet)
+  );
+  const nodeStylePresent = Boolean(
+    document.getElementById('codex-dream-skin-style') ||
+    document.getElementById('codex-glass-vision-skin-style') ||
+    (state?.styleMode === 'style' && state.styleNode?.isConnected)
+  );
+  const registeredStylePresent = registeredSheets instanceof Set && registeredSheets.size > 0;
   return JSON.stringify({
-    installed: document.documentElement.classList.contains('codex-dream-skin') ||
-      document.documentElement.classList.contains('codex-glass-vision-skin'),
-    version: window.__CODEX_DREAM_SKIN_STATE__?.version ||
-      window.__CODEX_GLASS_VISION_SKIN_STATE__?.version || null,
-    stylePresent: Boolean(document.getElementById('codex-dream-skin-style') ||
-      document.getElementById('codex-glass-vision-skin-style')),
-    chromePresent: Boolean(chrome),
-    chromePointerEvents: getComputedStyle(chrome || document.body).pointerEvents,
+    installed: root.getAttribute('data-dream-skin') === 'active' ||
+      root.classList.contains('codex-dream-skin') ||
+      root.classList.contains('codex-glass-vision-skin'),
+    version: state?.version || null,
+    stylePresent: adoptedStylePresent || nodeStylePresent || registeredStylePresent,
+    styleMode: state?.styleMode || null,
     homeRoute: Boolean(homeRoute),
     homePresent: Boolean(home),
-    hero: box(home?.firstElementChild?.firstElementChild?.firstElementChild),
+    hero: box(document.querySelector('[data-ds-part="home-hero"]') ||
+      home?.firstElementChild?.firstElementChild?.firstElementChild || home),
     visibleCardCount: cards.filter((item) => item?.visible).length,
     projectButton: box(home?.querySelector('.group\\/project-selector > button')),
-    composer: box(document.querySelector('.composer-surface-chrome')),
-    sidebar: box(document.querySelector('aside.app-shell-left-panel')),
+    composer: box(document.querySelector('[data-ds-part="composer"], .composer-surface-chrome, [class*="_ComposerLayoutRoot_"], [data-composer-surface-variant][data-composer-radius-variant]')),
+    sidebar: box(document.querySelector('[data-ds-part="sidebar"], aside.app-shell-left-panel')),
     documentOverflow: {
       x: document.documentElement.scrollWidth > document.documentElement.clientWidth,
       y: document.documentElement.scrollHeight > document.documentElement.clientHeight,

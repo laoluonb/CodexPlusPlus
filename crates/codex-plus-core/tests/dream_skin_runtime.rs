@@ -74,8 +74,6 @@ fn verification_requires_visible_composer() {
         "installed": true,
         "version": "codex-plus:windows:custom",
         "stylePresent": true,
-        "chromePresent": true,
-        "chromePointerEvents": "none",
         "homeRoute": false,
         "homePresent": false,
         "visibleCardCount": 0,
@@ -102,8 +100,6 @@ fn verification_accepts_target_project_live_contract() {
         "installed": true,
         "version": "codex-plus:windows:custom",
         "stylePresent": true,
-        "chromePresent": true,
-        "chromePointerEvents": "none",
         "homeRoute": true,
         "homePresent": true,
         "hero": { "visible": true, "width": 900, "height": 220 },
@@ -117,6 +113,29 @@ fn verification_accepts_target_project_live_contract() {
 
     assert_eq!(result.state, DreamSkinState::Pass);
     assert!(result.pass);
+}
+
+#[test]
+fn verification_accepts_official_dream_skin_runtime_contract() {
+    let result = parse_renderer_verification(serde_json::json!({
+        "installed": true,
+        "version": "1.5.16",
+        "stylePresent": true,
+        "styleMode": "adopted",
+        "homeRoute": true,
+        "homePresent": true,
+        "hero": { "visible": true, "width": 900, "height": 220 },
+        "visibleCardCount": 0,
+        "projectButton": null,
+        "composer": { "visible": true },
+        "sidebar": { "visible": true },
+        "documentOverflow": { "x": false, "y": false }
+    }))
+    .unwrap();
+
+    assert_eq!(result.state, DreamSkinState::Pass);
+    assert!(result.pass);
+    assert!(!result.checks.iter().any(|check| check.id == "chrome"));
 }
 
 #[test]

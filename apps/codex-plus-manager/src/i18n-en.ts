@@ -289,6 +289,8 @@ export const EN_PLAIN: Record<string, string> = {
   "上游协议": "Upstream protocol",
   "上一页": "Previous page",
   "下一页": "Next page",
+  "页码": "Page number",
+  "跳转": "Go",
   "下载并运行安装包": "Download and run installer",
   "不写 API 文件": "Does not write API files",
   "与 Codex 内插件菜单使用同一个远端广告源": "Uses the same remote ad source as the in-Codex plugin menu",

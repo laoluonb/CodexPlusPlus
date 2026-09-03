@@ -293,17 +293,16 @@ describe("renderer injection header compatibility", () => {
     assert.doesNotMatch(renderer, /container\.style\.(?:setProperty|removeProperty)\("display"/);
   });
 
-  it("keeps Windows Dream Skin compatible with the modern Codex main surface", async () => {
-    const windowsRenderers = await Promise.all([
-      readFile(new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url), "utf8"),
-      readFile(new URL("../../../assets/inject/upstream/cidala-tiger/windows/renderer-inject.js", import.meta.url), "utf8"),
-    ]);
+  it("uses the official Dream Skin selector contract for the modern Codex main surface", async () => {
+    const renderer = await readFile(
+      new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url),
+      "utf8",
+    );
 
-    for (const renderer of windowsRenderers) {
-      assert.match(renderer, /MainContentSurface/);
-      assert.match(renderer, /data-codex-plus-dream-surface/);
-      assert.match(renderer, /ensureShellMain/);
-    }
+    assert.match(renderer, /MainContentSurface/);
+    assert.match(renderer, /codex-dream-skin-selectors\/1/);
+    assert.match(renderer, /resolvedMainNode/);
+    assert.doesNotMatch(renderer, /data-codex-plus-dream-surface/);
   });
 });
 

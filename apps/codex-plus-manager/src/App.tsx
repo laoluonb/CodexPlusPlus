@@ -5480,6 +5480,21 @@ function DreamSkinPagination({
   pageCount: number;
   onPageChange: (page: number) => void;
 }) {
+  const [pageDraft, setPageDraft] = useState(String(page));
+
+  useEffect(() => {
+    setPageDraft(String(page));
+  }, [page]);
+
+  const jumpToPage = () => {
+    const requestedPage = Number.parseInt(pageDraft, 10);
+    const nextPage = Number.isFinite(requestedPage)
+      ? Math.max(1, Math.min(pageCount, requestedPage))
+      : page;
+    setPageDraft(String(nextPage));
+    onPageChange(nextPage);
+  };
+
   if (pageCount <= 1) return null;
   return (
     <nav aria-label={t("主题分页")} className="dream-skin-pagination">
@@ -5487,6 +5502,21 @@ function DreamSkinPagination({
         <ArrowLeft className="h-4 w-4" />
       </Button>
       <span>{tf("第 {0} / {1} 页", [page, pageCount])}</span>
+      <div className="dream-skin-page-jump">
+        <Input
+          aria-label={t("页码")}
+          inputMode="numeric"
+          max={pageCount}
+          min={1}
+          onChange={(event) => setPageDraft(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") jumpToPage();
+          }}
+          type="number"
+          value={pageDraft}
+        />
+        <Button onClick={jumpToPage} size="sm" variant="outline">{t("跳转")}</Button>
+      </div>
       <Button aria-label={t("下一页")} disabled={page >= pageCount} onClick={() => onPageChange(page + 1)} size="icon" title={t("下一页")} variant="outline">
         <ArrowRight className="h-4 w-4" />
       </Button>

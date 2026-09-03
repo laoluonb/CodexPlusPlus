@@ -143,6 +143,21 @@ describe("dream skin theme helpers", () => {
     assert.match(app, /visibleLocalThemes/);
     assert.match(app, /visibleItems/);
     assert.match(app, /function DreamSkinPagination/);
+    assert.match(app, /aria-label=\{t\("页码"\)\}/);
+    assert.match(app, /Math\.max\(1, Math\.min\(pageCount, requestedPage\)\)/);
+    assert.match(app, /if \(event\.key === "Enter"\) jumpToPage\(\)/);
+  });
+
+  it("keeps the official Dream Skin lifecycle intact", async () => {
+    const assets = await readFile(new URL("../../../crates/codex-plus-core/src/assets.rs", import.meta.url), "utf8");
+    const officialBranch = assets.slice(
+      assets.indexOf('let official_dream_skin = engine == "dream-skin"'),
+      assets.indexOf("fn managed_dream_skin_css"),
+    );
+
+    assert.match(officialBranch, /let skin_api_bootstrap = if official_dream_skin \{\s*String::new\(\)\s*\} else/);
+    assert.match(officialBranch, /let state_compatibility = if official_dream_skin \{\s*String::new\(\)\s*\} else/);
+    assert.match(assets, /22-official-lifecycle-1\.5\.16/);
   });
 
   it("exposes companion image controls in the theme editor", async () => {

@@ -70,7 +70,7 @@ const STEPWISE_SCRIPT: &str = concat!(
     "\n})();\n",
 );
 pub const DIAGNOSTIC_BUILD_ID: &str = "diag-20260518-1";
-const DREAM_SKIN_RENDERER_REVISION: &str = "21-upstream-1.5.16";
+const DREAM_SKIN_RENDERER_REVISION: &str = "22-official-lifecycle-1.5.16";
 
 pub fn renderer_script() -> &'static str {
     RENDERER_SCRIPT
@@ -195,9 +195,21 @@ fn dream_skin_target_runtime_script(settings: &BackendSettings, include_art: boo
                 .expect("dream skin target art should serialize")
         )
     });
-    let skin_api_bootstrap = dream_skin_skin_api_bootstrap_script(&theme);
+    let official_dream_skin = engine == "dream-skin";
+    let skin_api_bootstrap = if official_dream_skin {
+        String::new()
+    } else {
+        dream_skin_skin_api_bootstrap_script(&theme)
+    };
+    let state_compatibility = if official_dream_skin {
+        String::new()
+    } else {
+        String::from(
+            "const state = window.__CODEX_DREAM_SKIN_STATE__ || window.__CODEX_GLASS_VISION_SKIN_STATE__;\nif (state) {\n  state.version = `codex-plus:${String(window.__CODEX_PLUS_DREAM_SKIN_PLATFORM__ || 'unknown')}:${window.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__}:r${window.__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__}`;\n  state.observer?.disconnect?.();\n  if (state.timer) clearInterval(state.timer);\n  state.observer = null;\n  state.timer = null;\n}\n",
+        )
+    };
     payload = format!(
-        "(() => {{\nwindow.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ = true;\nwindow.__CODEX_PLUS_CLEAR_DREAM_SKIN__?.();\n{}window.__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_THEME__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__ = {};\n{}const result = {};\nconst state = window.__CODEX_DREAM_SKIN_STATE__ || window.__CODEX_GLASS_VISION_SKIN_STATE__;\nif (state) {{\n  state.version = `codex-plus:${{String(window.__CODEX_PLUS_DREAM_SKIN_PLATFORM__ || 'unknown')}}:${{window.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__}}:r${{window.__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__}}`;\n  state.observer?.disconnect?.();\n  if (state.timer) clearInterval(state.timer);\n  state.observer = null;\n  state.timer = null;\n}}\nwindow.__CODEX_PLUS_DREAM_SKIN_PAYLOAD_SIGNATURE__ = {};\nreturn result;\n}})()",
+        "(() => {{\nwindow.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ = true;\nwindow.__CODEX_PLUS_CLEAR_DREAM_SKIN__?.();\n{}window.__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_THEME__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_RUNTIME_REVISION__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__ = {};\n{}const result = {};\n{}window.__CODEX_PLUS_DREAM_SKIN_PAYLOAD_SIGNATURE__ = {};\nreturn result;\n}})()",
         art_assignment.unwrap_or_default(),
         serde_json::to_string(&dream_skin_art_content_signature(settings)).unwrap(),
         theme,
@@ -205,6 +217,7 @@ fn dream_skin_target_runtime_script(settings: &BackendSettings, include_art: boo
         serde_json::to_string(engine).unwrap(),
         skin_api_bootstrap,
         payload,
+        state_compatibility,
         serde_json::to_string(&payload_revision).unwrap(),
     );
     payload

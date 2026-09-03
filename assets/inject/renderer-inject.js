@@ -2179,7 +2179,6 @@
 
   function refreshDreamSkin() {
     const settings = codexPlusSettings();
-    if (settings.dreamSkinEnabled && !settings.dreamSkinPaused) ensureDreamSkinMainSurface();
     if (window.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__) {
       if (codexPlusBackendSettingsLoaded && (!settings.dreamSkinEnabled || settings.dreamSkinPaused)) {
         cleanupDreamSkin();
@@ -2192,6 +2191,7 @@
       }
       return;
     }
+    if (settings.dreamSkinEnabled && !settings.dreamSkinPaused) ensureDreamSkinMainSurface();
     if (!settings.dreamSkinEnabled || settings.dreamSkinPaused) {
       cleanupDreamSkin();
       return;

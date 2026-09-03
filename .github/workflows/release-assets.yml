@@ -8,7 +8,7 @@ on:
       tag:
         description: Release tag to build and upload assets for
         required: true
-        default: v1.2.62
+        default: v1.2.63
 
 permissions:
   contents: write

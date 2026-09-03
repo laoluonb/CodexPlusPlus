@@ -7184,6 +7184,18 @@ select {
   text-align: center;
 }
 
+.dream-skin-page-jump {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+}
+
+.dream-skin-page-jump input {
+  height: 36px;
+  text-align: center;
+  width: 72px;
+}
+
 .dream-skin-verification-meta small {
   color: hsl(var(--muted-foreground));
   font-size: 11px;
