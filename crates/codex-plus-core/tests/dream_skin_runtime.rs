@@ -139,10 +139,8 @@ fn verification_accepts_official_dream_skin_runtime_contract() {
 }
 
 #[test]
-fn bundled_skin_runtimes_gate_structural_home_layout_on_classic_chrome() {
+fn custom_skin_runtimes_gate_structural_home_layout_on_classic_chrome() {
     for relative_path in [
-        "assets/inject/upstream/dream-skin/windows/renderer-inject.js",
-        "assets/inject/upstream/dream-skin/macos/renderer-inject.js",
         "assets/inject/upstream/cidala-tiger/windows/renderer-inject.js",
         "assets/inject/upstream/cidala-tiger/macos/renderer-inject.js",
         "assets/inject/upstream/snow-skin/renderer-inject.js",
@@ -163,8 +161,6 @@ fn bundled_skin_runtimes_gate_structural_home_layout_on_classic_chrome() {
     }
 
     for relative_path in [
-        "assets/inject/upstream/dream-skin/windows/dream-skin.css",
-        "assets/inject/upstream/dream-skin/macos/dream-skin.css",
         "assets/inject/upstream/cidala-tiger/windows/dream-skin.css",
         "assets/inject/upstream/cidala-tiger/macos/dream-skin.css",
         "assets/inject/upstream/snow-skin/dream-skin.css",
@@ -183,6 +179,25 @@ fn bundled_skin_runtimes_gate_structural_home_layout_on_classic_chrome() {
                 || source.contains("data-dream-home-layout=\\\"structured\\\""),
             "missing soft layout CSS in {relative_path}"
         );
+    }
+}
+
+#[test]
+fn official_dream_skin_runtimes_keep_upstream_scope_contract() {
+    for relative_path in [
+        "assets/inject/upstream/dream-skin/windows/renderer-inject.js",
+        "assets/inject/upstream/dream-skin/macos/renderer-inject.js",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(relative_path);
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("failed to read {relative_path}: {error}"));
+        assert!(source.contains("const SELECTOR_CONTRACT ="));
+        assert!(source.contains("setAttribute(root, \"data-dream-skin\", \"active\")"));
+        assert!(source.contains("const refreshScope = () =>"));
+        assert!(!source.contains("homeHasClassicChrome"));
+        assert!(!source.contains("data-dream-home-layout"));
     }
 }
 
