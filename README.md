@@ -35,9 +35,7 @@ Codex++ 是面向 OpenAI Codex / ChatGPT 桌面应用的外部启动器与管理
 
 ## 交流与支持
 
-欢迎加入 Codex++ 交流 3 群（QQ群：619480492），反馈问题、交流使用体验或提出新功能建议。<a href="https://qm.qq.com/q/Erf1F1zwqs">点击链接加入群聊</a>。
-
-<img src="docs/images/discussion-group-qr.jpg" alt="Codex++ 微信群二维码" width="260">
+欢迎加入 Codex++ 交流 4 群（QQ群：1127858981），反馈问题、交流使用体验或提出新功能建议。<a href="https://qm.qq.com/q/5h3pxpxg7S">点击链接加入群聊</a>。
 
 社区讨论：<https://github.com/laoluonb/CodexPlusPlus/discussions>
 
@@ -47,10 +45,11 @@ Codex++ 是面向 OpenAI Codex / ChatGPT 桌面应用的外部启动器与管理
 
 | 模块 | 功能 |
 | --- | --- |
-| 供应商配置 | 官方登录、官方登录混入 API、纯 API、聚合供应商；Responses / Chat Completions；模型测试、模型列表、Provider Doctor、cc-switch 与链接导入 |
-| 模型与上下文 | 每模型上下文窗口、自动压缩阈值、`model_catalog_json`、通用配置，以及按供应商选择 MCP、Skill 和 Plugin |
+| 供应商配置 | 官方登录、官方登录混入 API、纯 API、聚合供应商；Grok 供应商管理；Responses / Chat Completions；模型测试、模型列表、Provider Doctor、cc-switch 与链接导入 |
+| 模型与上下文 | 每模型上下文窗口、自动压缩阈值、`model_catalog_json`、模型元数据导入（models.json）、通用配置，以及按供应商选择 MCP、Skill 和 Plugin |
 | 会话管理 | 扫描本地会话、批量删除、Markdown 导出、Token 用量历史、Provider metadata 同步与备份 |
-| Codex 增强 | 插件市场与模型白名单、会话操作、粘贴修复、中文界面、快速启动、会话宽度与滚动恢复、服务层级控制、Goals、Stepwise、图片覆盖层 |
+| 微信连接 | 个人微信扫码连接本机 Codex 会话，每个微信联系人映射到独立会话，可配置允许的微信用户 |
+| Codex 增强 | 插件市场与模型白名单、会话操作、粘贴修复、中文界面、快速启动、会话宽度与滚动恢复、服务层级控制、Goals、Stepwise、皮肤管理、图片覆盖层 |
 | 开发工作流 | 项目移动、Upstream worktree、线程 ID、Zed Remote 项目识别与打开 |
 | 脚本与维护 | 用户脚本安装与启停、应用检测、快捷方式、Watcher、环境冲突、日志诊断、健康检查和 Release 更新 |
 
@@ -63,7 +62,7 @@ Codex++ 将官方登录、混入 API 和纯 API 分开保存和切换：
 | 模式 | 用途 | 认证边界 |
 | --- | --- | --- |
 | 官方登录 | 只使用 ChatGPT / Codex 官方账号 | 清理自定义 provider 和 API Key，保留官方登录状态 |
-| 官方登录 + API | 保留官方账号与插件入口，模型请求走兼容 API | API Key 写入 provider bearer token，不写入纯 API 的 `auth.json` |
+| 官方登录 + API | 保留官方账号与插件入口，模型请求始终走兼容 API（不消耗官方额度，也不是官方优先回落） | API Key 写入 provider bearer token，不写入纯 API 的 `auth.json` |
 | 纯 API | 不依赖官方账号，完全使用自定义 Base URL / Key | 独立保存 `config.toml` 与 API Key，不混入官方认证 |
 | 聚合供应商 | 在多个普通 API 供应商之间路由 | 支持故障转移、按会话轮转、按请求轮转和权重轮转 |
 
@@ -80,6 +79,7 @@ Codex++ 将官方登录、混入 API 和纯 API 分开保存和切换：
 - 富文本粘贴转纯文本、强制中文、启动加速和原生菜单本地化。
 - 会话宽度、滚动位置恢复、线程 ID、服务层级切换和 Goals。
 - Stepwise 下一步建议，可单独配置 API、模型、建议数量与超时。
+- 皮肤管理：Dream Skin 社区主题的搜索、预览、安装和换图。
 - Upstream worktree、Zed Remote、自定义图片覆盖层和用户脚本。
 
 依赖注入脚本的设置通常需要保存后重新启动 Codex++ 才会生效。
@@ -91,6 +91,8 @@ Codex++ 通过 GitHub Release 发布安装包。Windows 会生成 NSIS 安装程
 管理工具的“关于”页可以检查并启动更新。静默启动器发现新版本时会拉起管理工具并进入更新提示。
 
 ## 数据位置
+
+以下 `~/.codex` 均指 Codex 主目录：设置了 `CODEX_HOME` 环境变量时以该目录为准，否则为用户目录下的 `.codex`。
 
 - Codex 配置：`~/.codex/config.toml`
 - Codex 登录状态：`~/.codex/auth.json`
@@ -107,6 +109,10 @@ Codex++ 通过 GitHub Release 发布安装包。Windows 会生成 NSIS 安装程
 ### 切换供应商后请求失败
 
 先在供应商详情中运行模型测试或 Provider Doctor，并确认协议、Base URL、Key 和测试模型匹配。纯 API 与官方混入模式使用不同的认证位置，不要手工复制两种模式的 `auth.json`。
+
+### 混入 API Key 模式是“官方优先、额度不足时 API 补偿”吗
+
+不是。官方登录 + API（混入）模式下，模型请求**始终走你配置的兼容 API**，官方账号只保留登录状态和插件入口，不会先消耗官方额度再回落到 API。需要“一个供应商失败时切到另一个”的行为时，使用聚合供应商：它支持故障转移、按会话轮转、按请求轮转和权重轮转。两种模式的认证保存位置不同，配置前先在供应商详情里用模型测试确认目标 API 可用。
 
 ### Upstream worktree 和 Codex 原生创建有什么区别
 

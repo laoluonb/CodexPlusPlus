@@ -1,6 +1,7 @@
 use codex_plus_core::dream_skin_runtime::{
     DreamSkinRuntimeStatus, DreamSkinState, apply_dream_skin_live, macos_arch_name,
-    parse_renderer_verification, windows_app_path_matches_registered_root,
+    parse_renderer_verification, renderer_verification_script,
+    windows_app_path_matches_registered_root,
 };
 use std::path::Path;
 

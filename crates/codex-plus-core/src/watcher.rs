@@ -288,6 +288,21 @@ mod process_identity_tests {
         assert_eq!(parse_ps_elapsed_seconds("invalid"), None);
     }
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_codex_process_scan_matches_app_executables_not_command_arguments() {
+        let processes = [
+            "  42 /Applications/ChatGPT.app/Contents/MacOS/ChatGPT --remote-debugging-port=9229",
+            "  11 /Applications/Codex Dev.app/Contents/MacOS/Codex Dev --remote-debugging-port=9229",
+            "  43 /Applications/ChatGPT.app/Contents/Frameworks/Codex Framework.framework/Helpers/Codex (Renderer).app/Contents/MacOS/Codex (Renderer)",
+            "  44 /Applications/Codex++.app/Contents/MacOS/CodexPlusPlus",
+            "  45 /bin/zsh -lc '/Applications/ChatGPT.app/Contents/MacOS/ChatGPT'",
+            "  46 /usr/bin/open -W -a /Applications/ChatGPT.app",
+        ];
+
+        assert_eq!(macos_codex_process_ids(processes), vec![11, 42]);
+    }
+
     #[cfg(windows)]
     #[test]
     fn current_windows_process_has_a_stable_birth_identity() {
@@ -460,26 +475,13 @@ pub fn find_session_index_cleanup_blocking_processes_from_snapshot(
 
 #[cfg(target_os = "macos")]
 pub fn find_codex_processes() -> Vec<u32> {
-    let mut ids = ["Codex", "ChatGPT"]
-        .into_iter()
-        .flat_map(|name| {
-            std::process::Command::new("pgrep")
-                .args(["-x", name])
-                .output()
-                .ok()
-                .into_iter()
-                .flat_map(|output| {
-                    String::from_utf8_lossy(&output.stdout)
-                        .lines()
-                        .map(str::to_string)
-                        .collect::<Vec<_>>()
-                })
-        })
-        .filter_map(|value| value.trim().parse::<u32>().ok())
-        .collect::<Vec<_>>();
-    ids.sort_unstable();
-    ids.dedup();
-    ids
+    let Ok(output) = std::process::Command::new("ps")
+        .args(["-axo", "pid=,args="])
+        .output()
+    else {
+        return Vec::new();
+    };
+    macos_codex_process_ids(String::from_utf8_lossy(&output.stdout).lines())
 }
 
 #[cfg(target_os = "macos")]
@@ -545,6 +547,75 @@ pub fn stop_launcher_processes_and_wait() {
     );
 }
 
+#[cfg(windows)]
+pub struct LauncherExitSnapshot {
+    processes: Vec<(u32, u64)>,
+}
+
+#[cfg(windows)]
+impl LauncherExitSnapshot {
+    pub fn capture() -> anyhow::Result<Self> {
+        let processes = crate::windows_integration::enumerate_processes();
+        let ids = filter_killable_launcher_processes(
+            processes.iter().map(|p| (p.process_id, p.parent_process_id, p.exe_file.as_str())),
+            std::process::id(),
+        );
+        let mut captured = Vec::new();
+        for pid in ids {
+            if let Some(birth) = crate::windows_integration::process_birth_id(pid) {
+                captured.push((pid, birth));
+            } else {
+                anyhow::bail!("Cannot verify launcher process identity: {pid}");
+            }
+        }
+        Ok(Self { processes: captured })
+    }
+
+    pub fn wait_for_exit(self, timeout: Duration) -> anyhow::Result<()> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = launcher_incarnations_still_running(
+                &self.processes,
+                |pid| crate::windows_integration::process_birth_id(pid),
+            );
+            if remaining.is_empty() {
+                return Ok(());
+            }
+            anyhow::ensure!(
+                std::time::Instant::now() < deadline,
+                "Previous launcher has not exited; no process was forcibly terminated"
+            );
+            std::thread::sleep(Duration::from_millis(RESTART_STOP_WAIT_INTERVAL_MS));
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn launcher_incarnations_still_running(
+    captured: &[(u32, u64)],
+    mut birth_id: impl FnMut(u32) -> Option<u64>,
+) -> Vec<u32> {
+    captured.iter().filter_map(|(pid, birth)| {
+        (birth_id(*pid) == Some(*birth)).then_some(*pid)
+    }).collect()
+}
+
+#[cfg(test)]
+mod launcher_exit_tests {
+    use super::launcher_incarnations_still_running;
+
+    #[test]
+    fn only_the_captured_launcher_incarnation_is_waited_for() {
+        let captured = [(10, 100), (20, 200), (30, 300)];
+        let remaining = launcher_incarnations_still_running(&captured, |pid| match pid {
+            10 => Some(100),
+            20 => Some(999),
+            _ => None,
+        });
+        assert_eq!(remaining, [10]);
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn stop_launcher_processes_and_wait() {
     terminate_macos_processes_and_wait(
@@ -596,6 +667,16 @@ pub fn stop_codex_processes_and_wait() {
 
 #[cfg(not(any(windows, target_os = "macos")))]
 pub fn stop_codex_processes_and_wait() {}
+
+#[cfg(target_os = "macos")]
+pub fn find_codex_processes_for_debug_port(debug_port: u16) -> Vec<u32> {
+    find_macos_codex_processes_for_debug_port(debug_port)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn find_codex_processes_for_debug_port(_debug_port: u16) -> Vec<u32> {
+    find_codex_processes()
+}
 
 #[cfg(target_os = "macos")]
 pub fn stop_codex_processes_for_debug_port_and_wait(debug_port: u16) {
@@ -684,7 +765,7 @@ fn find_launcher_processes() -> Vec<u32> {
 }
 
 #[cfg(target_os = "macos")]
-fn find_macos_codex_processes_for_debug_port(debug_port: u16) -> Vec<u32> {
+pub(crate) fn find_macos_codex_processes_for_debug_port(debug_port: u16) -> Vec<u32> {
     let Ok(output) = std::process::Command::new("ps")
         .args(["-axo", "pid=,args="])
         .output()
@@ -709,15 +790,47 @@ fn macos_codex_process_ids_for_debug_port<'a>(
             let trimmed = line.trim_start();
             let (pid, args) = trimmed.split_once(char::is_whitespace)?;
             let process_id = pid.parse::<u32>().ok()?;
-            let is_desktop_main = (args.contains(".app/Contents/MacOS/ChatGPT")
-                || args.contains(".app/Contents/MacOS/Codex"))
-                && !args.contains("/Helpers/");
+            let is_desktop_main = is_macos_codex_desktop_main(args);
             (is_desktop_main && args.contains(&debug_flag)).then_some(process_id)
         })
         .collect::<Vec<_>>();
     ids.sort_unstable();
     ids.dedup();
     ids
+}
+
+#[cfg(target_os = "macos")]
+fn macos_codex_process_ids<'a>(process_lines: impl IntoIterator<Item = &'a str>) -> Vec<u32> {
+    let mut ids = process_lines
+        .into_iter()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            let (pid, args) = trimmed.split_once(char::is_whitespace)?;
+            let process_id = pid.parse::<u32>().ok()?;
+            is_macos_codex_desktop_main(args).then_some(process_id)
+        })
+        .collect::<Vec<_>>();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+#[cfg(target_os = "macos")]
+fn is_macos_codex_desktop_main(args: &str) -> bool {
+    let args = args.trim_start();
+    if !args.starts_with('/') || args.contains("/Helpers/") {
+        return false;
+    }
+
+    let executable_end = args.find(" -").unwrap_or(args.len());
+    let executable = args[..executable_end].trim_end();
+    let Some((_, executable_name)) = executable.rsplit_once(".app/Contents/MacOS/") else {
+        return false;
+    };
+    matches!(
+        executable_name,
+        "Codex" | "Codex Dev" | "ChatGPT" | "ChatGPT Dev"
+    )
 }
 
 #[cfg(windows)]
