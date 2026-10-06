@@ -7619,7 +7619,9 @@ function RelayProfileDetail({
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="relay-editor-heading-copy">
-            <strong>{draft.name || (aggregateProfile ? t("未命名聚合供应商") : t("未命名供应商"))}</strong>
+            <strong title={draft.name || (aggregateProfile ? t("未命名聚合供应商") : t("未命名供应商"))}>
+              {draft.name || (aggregateProfile ? t("未命名聚合供应商") : t("未命名供应商"))}
+            </strong>
             <span>{hasUnsavedModelChanges ? `${detailStatus} · ${t("有未保存修改")}` : detailStatus}</span>
           </div>
         </div>

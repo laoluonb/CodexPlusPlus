@@ -1095,15 +1095,18 @@ body {
   min-height: 0;
   background: hsl(var(--shell-bg));
   animation: relay-detail-enter 280ms var(--motion-ease) both;
+  container-name: relay-detail;
+  container-type: inline-size;
 }
 
 .relay-detail-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   flex-shrink: 0;
   align-items: center;
   gap: 12px;
   min-height: 56px;
-  padding: 0 24px;
+  padding: 12px 24px;
   border-bottom: 1px solid hsl(var(--border) / 0.6);
   background: hsl(var(--shell-bg));
 }
@@ -1114,6 +1117,12 @@ body {
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
+  min-width: 0;
+}
+
+.relay-editor-actions > button {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .relay-detail-body {
@@ -1178,8 +1187,8 @@ body {
 }
 
 .relay-editor-heading {
-  display: flex;
-  flex: 1;
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -1196,7 +1205,7 @@ body {
   overflow: hidden;
   font-size: 15px;
   font-weight: 620;
-  letter-spacing: -0.01em;
+  letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1206,6 +1215,17 @@ body {
   overflow-wrap: anywhere;
   color: hsl(var(--muted-foreground));
   font-size: 12px;
+}
+
+@container relay-detail (max-width: 640px) {
+  .relay-detail-header {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .relay-editor-actions {
+    width: 100%;
+  }
 }
 
 .relay-fields {

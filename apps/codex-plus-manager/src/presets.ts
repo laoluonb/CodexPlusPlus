@@ -172,14 +172,15 @@ export const PRESETS: ProviderPreset[] = [
     websiteUrl: "https://longcat.chat/platform",
   },
   {
-    id: "torchai",
-    name: "TorchAI",
+    id: "ugqai",
+    name: "UGQai",
     category: "aggregator",
-    baseUrl: "https://torchai.ai/v1",
+    baseUrl: "https://ugq.ai/v1",
     protocol: "responses",
     model: "gpt-5.6-sol",
     modelList: ["gpt-5.6-sol", "codex-auto-review", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-terra"],
-    websiteUrl: "https://torchai.ai",
+    websiteUrl: "https://ugq.ai/",
+    apiKeyUrl: "https://ugq.ai/",
   },
 
   // ── 聚合/中转 ──
