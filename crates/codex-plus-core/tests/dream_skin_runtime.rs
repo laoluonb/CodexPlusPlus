@@ -120,7 +120,7 @@ fn verification_accepts_target_project_live_contract() {
 fn verification_accepts_official_dream_skin_runtime_contract() {
     let result = parse_renderer_verification(serde_json::json!({
         "installed": true,
-        "version": "1.5.16",
+        "version": "1.5.20",
         "stylePresent": true,
         "styleMode": "adopted",
         "homeRoute": true,

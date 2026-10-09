@@ -119,7 +119,7 @@ describe("dream skin theme helpers", () => {
     assert.match(app, /Math\.max\(-160, Math\.min\(160, Number\(event\.currentTarget\.value\) \|\| 0\)\)/);
   });
 
-  it("uses the official 1.5.16 renderer and selector contract", async () => {
+  it("uses the official 1.5.20 renderer and selector contract", async () => {
     const renderer = await readFile(
       new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url),
       "utf8",
@@ -133,6 +133,14 @@ describe("dream skin theme helpers", () => {
     assert.match(renderer, /__DREAM_SKIN_CSS_JSON__/);
     assert.match(renderer, /data-dream-skin/);
     assert.match(css, /html\[data-dream-skin="active"\]/);
+    assert.match(css, /data-app-shell-active-page="false"/);
+    assert.match(css, /data-app-shell-main-content-top-fade[^}]*:not\(:has\(\*\)\)/s);
+    assert.match(css, /--ds-upload-panel-alpha/);
+    assert.match(css, /--ds-upload-bg-alpha/);
+    assert.match(css, /border-radius:\s*22px/);
+    assert.match(css, /color:\s*currentColor/);
+    assert.match(css, /opacity:\s*\.76/);
+    assert.doesNotMatch(css, /body\s*\{[^}]*font-family\s*:/s);
     assert.doesNotMatch(renderer, /dream-aux-panel-layer/);
   });
 
@@ -157,7 +165,7 @@ describe("dream skin theme helpers", () => {
 
     assert.match(officialBranch, /let skin_api_bootstrap = if official_dream_skin \{\s*String::new\(\)\s*\} else/);
     assert.match(officialBranch, /let state_compatibility = if official_dream_skin \{\s*String::new\(\)\s*\} else/);
-    assert.match(assets, /22-official-lifecycle-1\.5\.16/);
+    assert.match(assets, /23-official-lifecycle-1\.5\.20/);
   });
 
   it("exposes companion image controls in the theme editor", async () => {

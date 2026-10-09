@@ -953,7 +953,7 @@ fn injection_script_installs_dream_skin_from_backend_settings() {
     assert!(script.contains("window.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ = true"));
     assert!(script.contains("window.__CODEX_PLUS_CLEAR_DREAM_SKIN__?.();"));
     assert!(script.contains("window.__CODEX_PLUS_DREAM_SKIN_TARGET_ENGINE__"));
-    assert!(script.contains("const VERSION = \"1.5.16\";"));
+    assert!(script.contains("const VERSION = \"1.5.20\";"));
     assert!(script.contains("data-dream-skin"));
     assert!(script.contains("setAttribute(root, \"data-dream-skin\", \"active\")"));
     assert!(script.contains("styleMode"));
