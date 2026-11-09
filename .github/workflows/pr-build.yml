@@ -54,6 +54,14 @@ jobs:
         # 独立 core 示例的依赖组合与桌面程序不同；旧缓存的 build-script 输出
         # 可能指向未随依赖缓存恢复的原生库，单独重新准备这个包即可。
         run: |
+          $nativeRoot = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'target/sherpa-onnx-prebuilt'))
+          $workspaceRoot = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\') + '\'
+          if (-not $nativeRoot.StartsWith($workspaceRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw '原生库缓存路径超出工作区'
+          }
+          if (Test-Path -LiteralPath $nativeRoot) {
+            Move-Item -LiteralPath $nativeRoot -Destination "$nativeRoot.incomplete-$env:GITHUB_RUN_ID"
+          }
           cargo clean --release -p sherpa-onnx-sys
           cargo build --release -p codex-plus-core --example check_windows_stop_context
 
