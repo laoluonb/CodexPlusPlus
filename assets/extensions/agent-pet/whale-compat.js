@@ -32,17 +32,28 @@
   function codexPlusWhaleFitBubble(parent) {
     const unit = parent?.parentElement?.clientWidth / 1026;
     if (!(unit > 0) || !parent.clientWidth || !parent.clientHeight) return;
-    // 主气泡为椭圆。540 × 260u 的居中矩形避开描边和底部尾巴；
-    // 用未变换的布局尺寸测量，缩放不会改变换行，也不会与左右镜像互相覆盖。
-    let halfWidth = 0, halfHeight = 0;
+    // 按每行四角与气泡椭圆的距离求最大字号，避免矩形安全区留下过多空白。
+    // 使用未变换的布局尺寸，保留换行、图片比例及左右镜像。
+    const corners = [];
     for (const child of parent.children) {
       if (!child.offsetWidth || !child.offsetHeight) continue;
       const left = child.offsetLeft - parent.clientWidth / 2;
       const top = child.offsetTop - parent.clientHeight / 2;
-      halfWidth = Math.max(halfWidth, -left, left + Math.max(child.offsetWidth, child.scrollWidth));
-      halfHeight = Math.max(halfHeight, -top, top + Math.max(child.offsetHeight, child.scrollHeight));
+      for (const x of [left, left + Math.max(child.offsetWidth, child.scrollWidth)]) {
+        for (const y of [top, top + Math.max(child.offsetHeight, child.scrollHeight)]) corners.push([x / unit, y / unit]);
+      }
     }
-    const fit = Math.min(1, Math.max(0, 270 * unit - 1) / (halfWidth || 1), Math.max(0, 130 * unit - 1) / (halfHeight || 1));
+    // SVG 主体椭圆中心 (454,248)，半径 (373,232)，预留描边和字形余量。
+    const computed = parent.ownerDocument?.defaultView?.getComputedStyle(parent);
+    const cx = (parseFloat(computed?.left) || parent.offsetLeft) / unit - 454;
+    const cy = (parseFloat(computed?.top) || parent.offsetTop) / unit - 248;
+    const fits = (scale) => corners.every(([x, y]) => ((cx + x * scale) / (350 - 1 / unit)) ** 2 + ((cy + y * scale) / (210 - 1 / unit)) ** 2 <= 1);
+    let low = 0, high = 1;
+    for (let i = 0; i < 16; i++) {
+      const mid = (low + high) / 2;
+      if (fits(mid)) low = mid; else high = mid;
+    }
+    const fit = fits(1) ? 1 : low;
     const value = String(Math.floor(fit * 10000) / 10000);
     if (parent.style.getPropertyValue("--codex-whale-content-fit") !== value) parent.style.setProperty("--codex-whale-content-fit", value);
   }
@@ -464,11 +475,11 @@
       defaultBubbleItems(items) {
         const copy = JSON.parse(JSON.stringify(items));
         if (copy[0]?.modules) copy[0].modules = [
-          { type: "text", text: "Codex 今日 tokens", size: 4, bold: true },
-          { type: "today", modelId: "codex", size: 12, rgb: "indigo", tpl: "{tokens_today}" },
-          { type: "today", modelId: "codex", size: 2, color: "#9fb0d9", tpl: "近7天 {tokens_week}" },
-          { type: "balance", modelId: "current-provider", size: 2, tpl: "供应商余额 {balance}" },
-          { type: "session", size: 2, tpl: "{session}", len: 16 },
+          { type: "text", text: "Codex 今日 tokens", size: 6, bold: true },
+          { type: "today", modelId: "codex", size: 20, rgb: "indigo", tpl: "{tokens_today}" },
+          { type: "today", modelId: "codex", size: 5, color: "#667eb5", tpl: "近7天 {tokens_week}" },
+          { type: "balance", modelId: "current-provider", size: 5, tpl: "供应商余额 {balance}" },
+          { type: "session", size: 5, tpl: "{session}", len: 16 },
         ];
         return copy;
       },

@@ -102,14 +102,14 @@ test("bubble content fits both dimensions without dropping rows and can grow bac
   const properties = new Map<string, string>();
   const parent: any = {
     isConnected: true, parentElement: { clientWidth: 410.4 }, clientWidth: 270, clientHeight: 179,
+    offsetLeft: 181.6, offsetTop: 99.2,
     style: { getPropertyValue: (key: string) => properties.get(key) || "", setProperty: (key: string, value: string) => properties.set(key, value) },
     children: [{ offsetWidth: 260, scrollWidth: 310, offsetHeight: 210, scrollHeight: 210, offsetLeft: 5, offsetTop: -15.5 }],
   };
   runtime.host.fitBubble(parent);
   const fit = Number(properties.get("--codex-whale-content-fit"));
   assert.ok(fit > 0 && fit < 1);
-  assert.ok(180 * fit <= 270 * 0.4 - 1);
-  assert.ok(105 * fit <= 130 * 0.4 - 1);
+  assert.ok((180 * fit / (350 * 0.4)) ** 2 + (105 * fit / (210 * 0.4)) ** 2 <= 1);
   assert.equal(parent.children.length, 1);
   parent.children[0] = { offsetWidth: 80, scrollWidth: 80, offsetHeight: 30, scrollHeight: 30, offsetLeft: 95, offsetTop: 74.5 };
   runtime.host.fitBubble(parent);

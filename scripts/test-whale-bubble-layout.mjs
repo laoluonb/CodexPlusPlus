@@ -98,10 +98,11 @@ try {
     const tb = document.querySelector(".dshwv-text");
     const box = tb.parentElement.getBoundingClientRect(), rect = tb.getBoundingClientRect();
     const u = box.width / 1026;
-    const cx = (rect.left+rect.right)/2, cy = (rect.top+rect.bottom)/2;
+    const flipped = whaleTest.host.test.root.classList.contains("dshwv-left");
+    const cx = box.left + (flipped ? 572 : 454) * u, cy = box.top + 248 * u;
     const rows = [...tb.children].filter(n=>n.offsetWidth && n.offsetHeight).map(n=> {
       const r = n.getBoundingClientRect();
-      return {text:n.textContent,left:r.left,right:r.right,top:r.top,bottom:r.bottom};
+      return {text:n.textContent,left:r.left,right:r.right,top:r.top,bottom:r.bottom,fontSize:parseFloat(getComputedStyle(n).fontSize)*Number(tb.style.getPropertyValue("--codex-whale-content-fit"))};
     });
     return {fit:Number(tb.style.getPropertyValue("--codex-whale-content-fit")),cx,cy,u,rows};
   })()`;
@@ -111,8 +112,9 @@ try {
     assert.match(result.rows.map((row) => row.text).join("|"), /7,441,021/);
     assert.match(result.rows.map((row) => row.text).join("|"), /52,828,132/);
     for (const row of result.rows) {
-      assert.ok(Math.max(Math.abs(row.left-result.cx), Math.abs(row.right-result.cx)) <= 270*result.u+1, `horizontal: ${row.text}`);
-      assert.ok(Math.max(Math.abs(row.top-result.cy), Math.abs(row.bottom-result.cy)) <= 130*result.u+1, `vertical: ${row.text}`);
+      for (const x of [row.left,row.right]) for (const y of [row.top,row.bottom]) {
+        assert.ok(((x-result.cx)/(350*result.u))**2+((y-result.cy)/(210*result.u))**2 <= 1.02, `ellipse: ${JSON.stringify(result)}`);
+      }
     }
   }
   for (const width of [180, 300, 408, 625]) {
@@ -130,6 +132,10 @@ try {
         await wait(60);
         const result = await evaluate(measure);
         check(result); cases.push({width,left,saved,fit:result.fit});
+        if (width === 408 && !saved) {
+          assert.ok(result.rows[1].fontSize >= 35, "main number stays readable at screenshot size");
+          assert.ok(result.rows[2].fontSize >= 16, "supporting text stays readable at screenshot size");
+        }
         if (output && width === 408 && !left) {
           const screenshot = await cdp("Page.captureScreenshot", { format: "png", clip: { x: 70, y: 60, width: 480, height: 490, scale: 1 } });
           await writeFile(path.join(output, saved ? "whale-saved-bubble.png" : "whale-default-bubble.png"), Buffer.from(screenshot.data, "base64"));
@@ -156,7 +162,8 @@ try {
   })()`);
   await wait(60);
   const loaded = await evaluate(measure);
-  assert.ok(loaded.rows.every((row) => Math.max(Math.abs(row.top-loaded.cy), Math.abs(row.bottom-loaded.cy)) <= 130*loaded.u+1));
+  assert.ok(loaded.rows.every((row) => [row.left,row.right].every(x => [row.top,row.bottom].every(y =>
+    ((x-loaded.cx)/(350*loaded.u))**2+((y-loaded.cy)/(210*loaded.u))**2 <= 1.02))));
   // 预览沿用相同布局器。
   await evaluate(`(() => {
     const container=document.createElement("div");container.id="preview";container.style.width="320px";document.body.appendChild(container);
