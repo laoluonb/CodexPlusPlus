@@ -1,5 +1,14 @@
 # 更新日志
 
+## 2.4.2 - 2026-11-09
+
+- 修复 Windows 商店版 Codex 安装在其他磁盘时，重启误报「用户数据上下文不一致」：启动入口与进程映像统一解析实际文件路径，保留用户、登录会话、数据目录和进程身份检查。
+- 「添加供应商」的赞助商分组仅保留 UGQai，移除 JOJO Code、RunAPI、APIKEY.FUN、ccccccAPI、TokenMy 预设。
+- 重启核验失败时记录具体原因，并提供不结束进程的只读诊断工具。
+
+提供 Windows x64 安装包、便携包和 macOS 通用安装包（Intel / Apple Silicon）。
+macOS 安装包使用临时签名（ad-hoc），未经过 Apple 公证；首次打开可能被系统拦截。
+
 ## 2.4.1 - 2026-11-09
 
 同步 CodexPlusPlus 上游 2.4.0，并保留本 fork 的现有定制。
