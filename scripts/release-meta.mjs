@@ -77,7 +77,7 @@ function workspaceLockBlocks(text) {
 }
 
 export function readText(file) {
-  return readFileSync(path.join(root, file), "utf8");
+  return readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n");
 }
 
 // 返回 [{ file, version }]，version 为 undefined 表示读不出来（格式变了或内部不一致）。

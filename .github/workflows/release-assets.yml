@@ -34,6 +34,8 @@ on:
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name || github.ref_name }}
+  # fork 可显式选择先发布 Windows；默认仍要求两个平台齐备。
+  RELEASE_PLATFORMS: ${{ vars.RELEASE_PLATFORMS || 'all' }}
 
 permissions:
   contents: write
@@ -53,6 +55,13 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
     steps:
+      - name: Validate release platforms
+        run: |
+          case "$RELEASE_PLATFORMS" in
+            all|windows) ;;
+            *) echo "::error::RELEASE_PLATFORMS 仅支持 all 或 windows"; exit 1 ;;
+          esac
+
       - name: Checkout release tag
         uses: actions/checkout@v4
         with:
@@ -199,7 +208,7 @@ jobs:
 
   macos-dmg:
     needs: prepare
-    if: github.event_name == 'push' || inputs.platform != 'windows'
+    if: vars.RELEASE_PLATFORMS != 'windows' && (github.event_name == 'push' || inputs.platform != 'windows')
     # 单个通用包（universal）同时支持 Intel 与 Apple Silicon，
     # 用户不必再自己判断架构，Release 也只多一个而不是两个产物。
     name: macOS DMG (universal)
@@ -319,10 +328,10 @@ jobs:
             test -f "$app/Contents/PkgInfo"
             test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
             if [[ "$app" == *"管理工具.app" ]]; then
-              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.bigpizzav3.codexplusplus.manager"
+              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.laoluonb.codexplusplus.manager"
               test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = "CodexPlusPlusManager"
             else
-              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.bigpizzav3.codexplusplus"
+              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.laoluonb.codexplusplus"
               test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = "CodexPlusPlus"
             fi
             test "$(/usr/libexec/PlistBuddy -c 'Print :CodexPlusUnifiedApp' "$app/Contents/Info.plist")" = "true"
@@ -393,9 +402,11 @@ jobs:
           const version = tag.replace(/^v/i, "");
           const required = [
             "CodexPlusPlus-" + version + "-windows-x64-setup.exe",
-            "CodexPlusPlus-" + version + "-windows-x64.zip",
-            "CodexPlusPlus-" + version + "-macos-universal.dmg"
+            "CodexPlusPlus-" + version + "-windows-x64.zip"
           ];
+          if (process.env.RELEASE_PLATFORMS !== "windows") {
+            required.push("CodexPlusPlus-" + version + "-macos-universal.dmg");
+          }
           for (const name of required) {
             if (!(release.assets || []).some((asset) => asset.name === name && asset.size > 0)) {
               throw new Error("发布附件缺失或为空：" + name);
@@ -426,8 +437,8 @@ jobs:
         run: gh release upload "$TAG" latest.json --clobber --repo "$REPO"
 
       - name: Publish Release
-        # 推 tag 的发版自动发布；补跑只在勾了 publish 时发布。两个平台都得在这一轮成功。
-        if: needs.prepare.outputs.is_draft == 'true' && (github.event_name == 'push' || inputs.publish) && needs.windows-installer.result == 'success' && needs.macos-dmg.result == 'success'
+        # 按显式选择的平台校验附件后发布；未配置时仍要求两个平台成功。
+        if: needs.prepare.outputs.is_draft == 'true' && (github.event_name == 'push' || inputs.publish) && needs.windows-installer.result == 'success' && (needs.macos-dmg.result == 'success' || (vars.RELEASE_PLATFORMS == 'windows' && needs.macos-dmg.result == 'skipped'))
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ env.RELEASE_TAG }}

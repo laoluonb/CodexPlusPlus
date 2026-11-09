@@ -254,10 +254,10 @@ jobs:
             test -f "$app/Contents/PkgInfo"
             test -x "$app/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")"
             if [[ "$app" == *"管理工具.app" ]]; then
-              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.bigpizzav3.codexplusplus.manager"
+              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.laoluonb.codexplusplus.manager"
               test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = "CodexPlusPlusManager"
             else
-              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.bigpizzav3.codexplusplus"
+              test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$app/Contents/Info.plist")" = "com.laoluonb.codexplusplus"
               test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$app/Contents/Info.plist")" = "CodexPlusPlus"
             fi
             test "$(/usr/libexec/PlistBuddy -c 'Print :CodexPlusUnifiedApp' "$app/Contents/Info.plist")" = "true"

@@ -140,6 +140,6 @@ step(`已打 tag ${tag} → ${run("git", ["rev-parse", "--short", "HEAD"])}`);
 execFileSync("git", ["push", "--atomic", "origin", "HEAD:refs/heads/main", `refs/tags/${tag}`], { cwd: root, stdio: "inherit" });
 
 const repo = tryRun("gh", ["repo", "view", "--json", "nameWithOwner", "-q", ".nameWithOwner"]);
-const slug = repo.ok ? repo.out : "BigPizzaV3/CodexPlusPlus";
+const slug = repo.ok ? repo.out : "laoluonb/CodexPlusPlus";
 console.log(`\n✓ 已推送 ${tag}。CI 会建草稿 Release → 构建附件 → 附件齐了自动发布（约 10 分钟）：`);
 console.log(`  https://github.com/${slug}/actions/workflows/release-assets.yml`);
