@@ -22,7 +22,8 @@ permissions:
 
 # 同一个 PR 推了新提交就取消旧的那轮；main 上每次推送都完整跑完，方便事后定位是哪次提交红的。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # 手动诊断独立运行，避免等待 main 的多平台打包，也不挤掉待运行的 main 检查。
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && github.run_id || github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
