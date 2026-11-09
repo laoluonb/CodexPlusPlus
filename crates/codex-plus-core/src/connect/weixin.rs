@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use super::media::{self, AttachmentKind, DownloadedAttachments};
 use anyhow::{Context, bail};
 use base64::Engine;
 use futures_util::StreamExt;
@@ -19,6 +20,7 @@ pub struct WeixinClient {
     token: String,
     route_tag: String,
     client: reqwest::Client,
+    media_client: media::MediaClient,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -91,6 +93,10 @@ pub struct WeixinMessageItem {
     #[serde(default)]
     pub voice_item: Option<WeixinVoiceItem>,
     #[serde(default)]
+    pub image_item: Option<media::WeixinImageItem>,
+    #[serde(default)]
+    pub file_item: Option<media::WeixinFileItem>,
+    #[serde(default)]
     pub ref_msg: Option<WeixinReferenceMessage>,
 }
 
@@ -124,7 +130,111 @@ struct WeixinSendResponse {
     errmsg: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct WeixinTypingConfigResponse {
+    #[serde(default)]
+    ret: i64,
+    #[serde(default)]
+    errcode: i64,
+    #[serde(default)]
+    errmsg: String,
+    #[serde(default)]
+    typing_ticket: Option<String>,
+}
+
 impl WeixinClient {
+    pub(super) async fn send_workspace_attachment(
+        &self,
+        to_user_id: &str,
+        path: &std::path::Path,
+        kind: AttachmentKind,
+        context_token: &str,
+        permit: &super::outbound::OutboundPermit,
+    ) -> anyhow::Result<()> {
+        permit.check_peer(to_user_id)?;
+        if context_token.trim().is_empty() {
+            bail!("微信附件发送缺少 context_token");
+        }
+        permit.guard(async {
+            let upload = media::PreparedUpload::read_workspace(path, &permit.workspace).await?;
+            permit.check_peer(to_user_id)?;
+            let response = self.post_media_api("ilink/bot/getuploadurl", &json!({
+                "filekey": upload.filekey,
+                "media_type": match kind { AttachmentKind::Image => 1, AttachmentKind::File => 3 },
+                "to_user_id": to_user_id,
+                "rawsize": upload.plaintext_size,
+                "rawfilemd5": upload.md5,
+                "filesize": upload.ciphertext.len(),
+                "no_need_thumb": true,
+                "aeskey": upload.key_hex,
+                "base_info": { "channel_version": CHANNEL_VERSION }
+            })).await?;
+            permit.check_peer(to_user_id)?;
+            let download_param = self.media_client.upload(&upload, &response).await?;
+            permit.check_peer(to_user_id)?;
+            let media = json!({
+                "encrypt_query_param": download_param,
+                "aes_key": base64::engine::general_purpose::STANDARD.encode(&upload.key_hex),
+                "encrypt_type": 1
+            });
+            let item = match kind {
+                AttachmentKind::Image => json!({
+                    "type": 2, "image_item": { "media": media, "mid_size": upload.ciphertext.len() }
+                }),
+                AttachmentKind::File => json!({
+                    "type": 4, "file_item": {
+                        "media": media, "file_name": upload.filename, "len": upload.plaintext_size.to_string()
+                    }
+                }),
+            };
+            self.post_media_api("ilink/bot/sendmessage", &json!({
+                "msg": {
+                    "from_user_id": "", "to_user_id": to_user_id,
+                    "client_id": Uuid::new_v4().to_string(),
+                    "message_type": 2, "message_state": 2,
+                    "item_list": [item], "context_token": context_token
+                },
+                "base_info": { "channel_version": CHANNEL_VERSION }
+            })).await?;
+            Ok(())
+        }).await
+    }
+
+    async fn post_media_api(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+    ) -> anyhow::Result<media::MediaApiResponse> {
+        let response = self
+            .client
+            .post(self.endpoint(path)?)
+            .headers(self.auth_headers()?)
+            .json(body)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("微信媒体 API 请求失败"))?;
+        let (status, bytes) =
+            read_response_limited(response, MAX_SMALL_RESPONSE_BYTES, "微信媒体 API").await?;
+        if !status.is_success() {
+            bail!("微信媒体 API 请求失败：HTTP {status}");
+        }
+        let result = if bytes.iter().all(u8::is_ascii_whitespace) {
+            media::MediaApiResponse::default()
+        } else {
+            serde_json::from_slice::<media::MediaApiResponse>(&bytes)
+                .map_err(|_| anyhow::anyhow!("微信媒体 API 响应格式无效"))?
+        };
+        if result.ret != 0 || result.errcode != 0 {
+            bail!(
+                "微信媒体 API 被拒绝：ret={} errcode={}",
+                result.ret,
+                result.errcode
+            );
+        }
+        Ok(result)
+    }
+
     pub fn new(base_url: &str, token: &str, route_tag: &str) -> anyhow::Result<Self> {
         let base_url = normalize_base_url(base_url);
         let client = reqwest::Client::builder()
@@ -136,7 +246,24 @@ impl WeixinClient {
             token: token.trim().to_string(),
             route_tag: route_tag.trim().to_string(),
             client,
+            media_client: media::MediaClient::new(media::DEFAULT_CDN_BASE_URL)?,
         })
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_media_base_url(mut self, base_url: &str) -> anyhow::Result<Self> {
+        self.media_client = media::MediaClient::new(base_url)?;
+        Ok(self)
+    }
+
+    pub(super) async fn download_attachments(
+        &self,
+        message: &WeixinMessage,
+        directory: &super::inbox::Inbox,
+    ) -> DownloadedAttachments {
+        self.media_client
+            .download_attachments(message, directory)
+            .await
     }
 
     pub async fn fetch_qr_code(base_url: &str, route_tag: &str) -> anyhow::Result<WeixinQrCode> {
@@ -262,6 +389,113 @@ impl WeixinClient {
         Ok(())
     }
 
+    pub(super) async fn start_typing(
+        &self,
+        to_user_id: &str,
+        context_token: &str,
+    ) -> anyhow::Result<String> {
+        if context_token.trim().is_empty() {
+            bail!("微信输入状态缺少 context_token");
+        }
+        let response = self
+            .post_small_api(
+                "ilink/bot/getconfig",
+                &json!({
+                    "ilink_user_id": to_user_id,
+                    "context_token": context_token,
+                    "base_info": { "channel_version": CHANNEL_VERSION }
+                }),
+                "获取微信输入状态配置",
+            )
+            .await?;
+        let result: WeixinTypingConfigResponse = serde_json::from_slice(&response)
+            .context("微信输入状态配置响应格式无效")?;
+        if result.ret != 0 || result.errcode != 0 {
+            bail!(
+                "获取微信输入状态配置被拒绝：ret={} errcode={} {}",
+                result.ret,
+                result.errcode,
+                result.errmsg
+            );
+        }
+        let typing_ticket = result
+            .typing_ticket
+            .filter(|ticket| !ticket.trim().is_empty())
+            .context("微信输入状态配置缺少 typing_ticket")?;
+        self.send_typing_status(to_user_id, &typing_ticket, 1)
+            .await?;
+        Ok(typing_ticket)
+    }
+
+    pub(super) async fn stop_typing(
+        &self,
+        to_user_id: &str,
+        typing_ticket: &str,
+    ) -> anyhow::Result<()> {
+        self.send_typing_status(to_user_id, typing_ticket, 2)
+            .await
+    }
+
+    async fn send_typing_status(
+        &self,
+        to_user_id: &str,
+        typing_ticket: &str,
+        status: i64,
+    ) -> anyhow::Result<()> {
+        if typing_ticket.trim().is_empty() {
+            bail!("微信输入状态缺少 typing_ticket");
+        }
+        let response = self
+            .post_small_api(
+                "ilink/bot/sendtyping",
+                &json!({
+                    "ilink_user_id": to_user_id,
+                    "typing_ticket": typing_ticket,
+                    "status": status,
+                    "base_info": { "channel_version": CHANNEL_VERSION }
+                }),
+                "发送微信输入状态",
+            )
+            .await?;
+        if response.iter().all(u8::is_ascii_whitespace) {
+            return Ok(());
+        }
+        let result: WeixinSendResponse =
+            serde_json::from_slice(&response).context("微信输入状态响应格式无效")?;
+        if result.ret != 0 || result.errcode != 0 {
+            bail!(
+                "发送微信输入状态被拒绝：ret={} errcode={} {}",
+                result.ret,
+                result.errcode,
+                result.errmsg
+            );
+        }
+        Ok(())
+    }
+
+    async fn post_small_api(
+        &self,
+        path: &str,
+        body: &serde_json::Value,
+        label: &str,
+    ) -> anyhow::Result<Vec<u8>> {
+        let response = self
+            .client
+            .post(self.endpoint(path)?)
+            .headers(self.auth_headers()?)
+            .json(body)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .with_context(|| format!("{label}请求失败"))?;
+        let (status, bytes) =
+            read_response_limited(response, MAX_SMALL_RESPONSE_BYTES, label).await?;
+        if !status.is_success() {
+            bail!("{label}失败：HTTP {status}");
+        }
+        Ok(bytes)
+    }
+
     async fn send_text(
         &self,
         to_user_id: &str,
@@ -375,12 +609,18 @@ async fn read_response_limited(
 }
 
 impl WeixinMessage {
+    pub fn has_attachments(&self) -> bool {
+        media::has_attachments(self)
+    }
+
     pub fn is_finished_user_message(&self) -> bool {
         self.message_type == 1 && self.message_state == 2 && !self.from_user_id.trim().is_empty()
     }
 
     pub fn text(&self) -> Option<String> {
-        self.item_list.iter().find_map(message_item_text)
+        self.item_list
+            .iter()
+            .find_map(|item| message_item_text(item, 0))
     }
 
     pub fn dedup_key(&self) -> String {
@@ -399,7 +639,7 @@ impl WeixinMessage {
     }
 }
 
-fn message_item_text(item: &WeixinMessageItem) -> Option<String> {
+fn message_item_text(item: &WeixinMessageItem, depth: usize) -> Option<String> {
     let body = match item.item_type {
         1 => item.text_item.as_ref().map(|item| item.text.trim()),
         3 => item.voice_item.as_ref().map(|item| item.text.trim()),
@@ -415,8 +655,9 @@ fn message_item_text(item: &WeixinMessageItem) -> Option<String> {
     if !reference.title.trim().is_empty() {
         reference_parts.push(reference.title.trim().to_string());
     }
-    if let Some(reference_item) = reference.message_item.as_deref()
-        && let Some(reference_text) = message_item_text(reference_item)
+    if depth < media::MAX_REFERENCE_DEPTH
+        && let Some(reference_item) = reference.message_item.as_deref()
+        && let Some(reference_text) = message_item_text(reference_item, depth + 1)
     {
         reference_parts.push(reference_text);
     }
@@ -456,6 +697,21 @@ fn chunk_text(text: &str, max_chars: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn quoted_text_recursion_uses_the_same_bound_as_media() {
+        let mut item = json!({"type":1,"text_item":{"text":"too-deep"}});
+        for depth in (0..8).rev() {
+            item = json!({
+                "type":1,"text_item":{"text":format!("level-{depth}")},
+                "ref_msg":{"message_item":item}
+            });
+        }
+        let message: WeixinMessage = serde_json::from_value(json!({"item_list":[item]})).unwrap();
+        let text = message.text().unwrap();
+        assert!(text.contains("level-0") && text.contains("level-4"));
+        assert!(!text.contains("level-5") && !text.contains("too-deep"));
+    }
 
     #[test]
     fn extracts_text_and_voice_transcription() {
@@ -509,5 +765,71 @@ mod tests {
         let svg = render_qr_svg("https://example.test/login").unwrap();
         assert!(svg.starts_with("<?xml"));
         assert!(svg.contains("<svg"));
+    }
+
+    #[tokio::test]
+    async fn typing_indicator_fetches_ticket_then_sends_start_and_stop() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/ilink/bot/getconfig"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"typing_ticket":"typing-secret"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/ilink/bot/sendtyping"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ret":0})))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = WeixinClient::new(&server.uri(), "bot-secret", "route-secret").unwrap();
+
+        let ticket = client.start_typing("peer", "context-secret").await.unwrap();
+        client.stop_typing("peer", &ticket).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 3);
+        let config: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+        assert_eq!(config["ilink_user_id"], "peer");
+        assert_eq!(config["context_token"], "context-secret");
+        for (request, expected_status) in [(&requests[1], 1), (&requests[2], 2)] {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap();
+            assert_eq!(body["ilink_user_id"], "peer");
+            assert_eq!(body["typing_ticket"], "typing-secret");
+            assert_eq!(body["status"], expected_status);
+            assert_eq!(body["base_info"]["channel_version"], CHANNEL_VERSION);
+        }
+    }
+
+    #[tokio::test]
+    async fn typing_indicator_rejects_missing_ticket_before_status_request() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/ilink/bot/getconfig"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ret":0})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = WeixinClient::new(&server.uri(), "bot-secret", "").unwrap();
+
+        let error = client
+            .start_typing("peer", "context-secret")
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("typing_ticket"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 }

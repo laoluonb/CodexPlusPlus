@@ -9,10 +9,17 @@ export type RelayModelRouteProfile = {
   name: string;
   baseUrl: string;
   apiKey: string;
-  protocol: "responses" | "chatCompletions";
+  protocol: "responses" | "chatCompletions" | "anthropicMessages";
   relayMode: "official" | "mixedApi" | "pureApi" | "aggregate";
   officialMixApiKey: boolean;
   noAuth?: boolean;
+  webSearchHistoryCompat?: boolean;
+  localCompactionPromptAtEnd?: boolean;
+  strictResponsesReasoning?: boolean;
+  stripImageGenerationTool?: boolean;
+  stripResponsesImageDetail?: boolean;
+  pureApiImageGeneration?: boolean;
+  modelMetadata?: string;
   modelRoutes?: RelayModelRoute[];
 };
 
@@ -25,6 +32,21 @@ export type RelayModelRouteSettings = {
 
 export const PROTOCOL_PROXY_BASE_URL = "http://127.0.0.1:57321/v1";
 export const NO_AUTH_PROXY_BEARER_TOKEN = "codex-plus-no-auth";
+
+// 独立代理保存在后端 sidecar；前端只缓存是否启用，不把地址/凭据写入供应商快照。
+const independentProxyProfiles = new Set<string>();
+
+export function setIndependentProxyConfigured(profileId: string, configured: boolean): void {
+  if (configured) independentProxyProfiles.add(profileId);
+  else independentProxyProfiles.delete(profileId);
+}
+
+export function independentProxyEnabled(
+  profile: Pick<RelayModelRouteProfile, "relayMode" | "officialMixApiKey"> & { id?: string },
+): boolean {
+  return !!profile.id && independentProxyProfiles.has(profile.id)
+    && (profile.relayMode !== "official" || profile.officialMixApiKey);
+}
 
 export type RelayModelRouteIssue = {
   kind: "incomplete" | "duplicate" | "self" | "missingTarget" | "aggregateTarget" | "targetProtocol" | "targetCredentials";
@@ -71,6 +93,51 @@ export function findRelayModelRouteIssue(
   return null;
 }
 
+export function webSearchHistoryCompatEnabled(
+  profile: Pick<RelayModelRouteProfile, "protocol" | "relayMode" | "officialMixApiKey" | "webSearchHistoryCompat">,
+): boolean {
+  return profile.webSearchHistoryCompat === true
+    && profile.protocol === "responses"
+    && profile.relayMode !== "aggregate"
+    && (profile.relayMode !== "official" || profile.officialMixApiKey);
+}
+
+export function localCompactionPromptAtEndEnabled(
+  profile: Pick<RelayModelRouteProfile, "protocol" | "relayMode" | "officialMixApiKey" | "localCompactionPromptAtEnd">,
+): boolean {
+  return profile.localCompactionPromptAtEnd === true
+    && (profile.protocol === "responses" || profile.protocol === "chatCompletions")
+    && profile.relayMode !== "aggregate"
+    && (profile.relayMode !== "official" || profile.officialMixApiKey);
+}
+
+/** #228：转发前移除托管生图工具，只对第三方 Responses 上游生效，且要走本地代理。 */
+export function stripImageGenerationToolEnabled(
+  profile: Pick<RelayModelRouteProfile, "protocol" | "relayMode" | "officialMixApiKey" | "stripImageGenerationTool">,
+): boolean {
+  return profile.stripImageGenerationTool === true
+    && profile.protocol === "responses"
+    && profile.relayMode !== "aggregate"
+    && (profile.relayMode !== "official" || profile.officialMixApiKey);
+}
+
+/** #2870：转发前移除 Responses 图片 `detail`，只对第三方 Responses 上游生效，且要走本地代理。 */
+export function stripResponsesImageDetailEnabled(
+  profile: Pick<RelayModelRouteProfile, "protocol" | "relayMode" | "officialMixApiKey" | "stripResponsesImageDetail">,
+): boolean {
+  return profile.stripResponsesImageDetail === true
+    && profile.protocol === "responses"
+    && profile.relayMode !== "aggregate"
+    && (profile.relayMode !== "official" || profile.officialMixApiKey);
+}
+
+/** #1433：纯 API 下让 Codex 注册原生生图工具，生图请求要经本地代理转给供应商。 */
+export function pureApiImageGenerationEnabled(
+  profile: Pick<RelayModelRouteProfile, "relayMode" | "pureApiImageGeneration">,
+): boolean {
+  return profile.pureApiImageGeneration === true && profile.relayMode === "pureApi";
+}
+
 export function settingsRequireLocalHelper(settings: RelayModelRouteSettings): boolean {
   if (settings.enhancementsEnabled) return true;
   const active = settings.relayProfiles.find((profile) => profile.id === settings.activeRelayId)
@@ -80,9 +147,26 @@ export function settingsRequireLocalHelper(settings: RelayModelRouteSettings): b
     || active.protocol === "chatCompletions"
     || (active.relayMode === "pureApi" && active.noAuth === true)
     || (active.relayMode === "official" && active.officialMixApiKey)
+    || independentProxyEnabled(active)
+    || webSearchHistoryCompatEnabled(active)
+    || localCompactionPromptAtEndEnabled(active)
+    || requestCompatibilityEnabled(active)
+    || stripImageGenerationToolEnabled(active)
+    || pureApiImageGenerationEnabled(active)
     || normalizeRelayModelRoutes(active.modelRoutes).some(
       (route) => Boolean(route.model.trim() && route.targetRelayId.trim()),
     );
+}
+
+export function requestCompatibilityEnabled(profile: Pick<RelayModelRouteProfile, "protocol" | "relayMode" | "officialMixApiKey" | "strictResponsesReasoning" | "modelMetadata">): boolean {
+  if (profile.relayMode === "official" && !profile.officialMixApiKey) return false;
+  if (profile.protocol === "responses" && profile.strictResponsesReasoning === true) return true;
+  if (!profile.modelMetadata?.includes("codex_plus_reasoning_parameters")) return false;
+  try {
+    const map: unknown = JSON.parse(profile.modelMetadata);
+    return !!map && typeof map === "object" && !Array.isArray(map) && Object.values(map).some((entry) =>
+      entry && typeof entry === "object" && ["omit", "passthrough"].includes(entry.codex_plus_reasoning_parameters));
+  } catch { return false; }
 }
 
 export function modelRouteSaveRequiresRestart(

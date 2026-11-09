@@ -1,11 +1,114 @@
 use base64::Engine;
-use serde_json::Map;
 use serde_json::{Value, json};
 use std::path::Path;
 
 use crate::settings::BackendSettings;
 
 const RENDERER_SCRIPT: &str = include_str!("../../../assets/inject/renderer-inject.js");
+/// Agent 桌宠的按压 / 松开音效，按音效组内嵌：(组名, 按压音, 松开音)。
+/// 音效随启动器本地内嵌，运行时不下载；桌宠图片则不内嵌，见 `agent_pet`。
+const AGENT_PET_SOUNDS: &[(&str, &[u8], &[u8])] = &[
+    (
+        "duck",
+        include_bytes!("../../../assets/inject/agent-pet/sounds/Ya1.mp3"),
+        include_bytes!("../../../assets/inject/agent-pet/sounds/Ya2.mp3"),
+    ),
+    (
+        "fx1",
+        include_bytes!("../../../assets/inject/agent-pet/sounds/D1.mp3"),
+        include_bytes!("../../../assets/inject/agent-pet/sounds/D2.mp3"),
+    ),
+];
+
+/// 全部音效组：`{ 组名: { press, release } }`，值为 data URI。管理器试听与 Codex 注入共用。
+pub fn agent_pet_sounds() -> Value {
+    let values: serde_json::Map<String, Value> = AGENT_PET_SOUNDS
+        .iter()
+        .map(|(name, press, release)| {
+            (
+                (*name).to_string(),
+                json!({
+                    "press": image_data_uri("audio/mpeg", press),
+                    "release": image_data_uri("audio/mpeg", release),
+                }),
+            )
+        })
+        .collect();
+    Value::Object(values)
+}
+
+/// 大肥鱼（旧版 DeepSeek 鲸鱼挂件）的角色图、音效与动图，来自上游原样素材，
+/// 许可范围见 `assets/inject/upstream/whale-widget/PROVENANCE.md`。引擎随 Agent 桌宠拓展包发布
+/// （见 [`crate::bundled_extensions`]），素材经路由 `/whale/media` 交给它（`bubble-money1.gif` 超过拓展包单个资源的上限）。
+const WHALE_DEFAULT_IMAGE: &[u8] =
+    include_bytes!("../../../assets/inject/upstream/whale-widget/DSniang1.png");
+const WHALE_MEDIA: &[(&str, &str, &[u8])] = &[
+    ("DSniang1.png", "image/png", WHALE_DEFAULT_IMAGE),
+    (
+        "Ya1.mp3",
+        "audio/mpeg",
+        include_bytes!("../../../assets/inject/upstream/whale-widget/Ya1.mp3"),
+    ),
+    (
+        "Ya2.mp3",
+        "audio/mpeg",
+        include_bytes!("../../../assets/inject/upstream/whale-widget/Ya2.mp3"),
+    ),
+    (
+        "D1.mp3",
+        "audio/mpeg",
+        include_bytes!("../../../assets/inject/upstream/whale-widget/D1.mp3"),
+    ),
+    (
+        "D2.mp3",
+        "audio/mpeg",
+        include_bytes!("../../../assets/inject/upstream/whale-widget/D2.mp3"),
+    ),
+    (
+        "minecraft-exp-orb.wav",
+        "audio/wav",
+        include_bytes!("../../../assets/inject/upstream/whale-widget/minecraft-exp-orb.wav"),
+    ),
+    (
+        "task-end-a.wav",
+        "audio/wav",
+        include_bytes!("../../../assets/inject/upstream/whale-widget/task-end-a.wav"),
+    ),
+    (
+        "bubble-petpet.gif",
+        "image/gif",
+        include_bytes!("../../../assets/inject/upstream/whale-widget/bubble-petpet.gif"),
+    ),
+    (
+        "bubble-money1.gif",
+        "image/gif",
+        include_bytes!("../../../assets/inject/upstream/whale-widget/bubble-money1.gif"),
+    ),
+    (
+        "rua.gif",
+        "image/gif",
+        include_bytes!("../../../assets/inject/upstream/whale-widget/rua.gif"),
+    ),
+];
+
+/// 大肥鱼的默认角色图（data URI），供管理器「Agent 桌宠」页预览。
+pub fn whale_default_image_data_uri() -> String {
+    image_data_uri("image/png", WHALE_DEFAULT_IMAGE)
+}
+
+/// 大肥鱼的内嵌素材：`{ status, image, assets: { 文件名: data URI } }`，路由 `/whale/media` 原样返回。
+pub fn whale_media() -> Value {
+    let assets: serde_json::Map<String, Value> = WHALE_MEDIA
+        .iter()
+        .map(|(name, mime, bytes)| ((*name).to_string(), json!(image_data_uri(mime, bytes))))
+        .collect();
+    json!({
+        "status": "ok",
+        "image": image_data_uri("image/png", WHALE_DEFAULT_IMAGE),
+        "assets": assets,
+    })
+}
+
 #[cfg(windows)]
 const DREAM_TARGET_CSS: &str =
     include_str!("../../../assets/inject/upstream/dream-skin/windows/dream-skin.css");
@@ -38,6 +141,8 @@ const GLASS_VISION_CSS: &str =
     include_str!("../../../assets/inject/upstream/glass-vision/glass-vision.css");
 const GLASS_VISION_RENDERER: &str =
     include_str!("../../../assets/inject/upstream/glass-vision/renderer-inject.js");
+const DREAM_SKIN_COMMUNITY_COMPAT_CSS: &str =
+    include_str!("../../../assets/inject/dream-skin-community-compat.css");
 #[cfg(windows)]
 const DREAM_SKIN_DEFAULT_IMAGE: &[u8] =
     include_bytes!("../../../assets/inject/upstream/dream-skin/windows/dream-reference.jpg");
@@ -45,6 +150,16 @@ const DREAM_SKIN_DEFAULT_IMAGE: &[u8] =
 const DREAM_SKIN_DEFAULT_IMAGE: &[u8] =
     include_bytes!("../../../assets/inject/upstream/dream-skin/macos/portal-hero.png");
 const PET_REAL_MOUSE_SCRIPT: &str = include_str!("../../../assets/inject/pet-real-mouse-inject.js");
+const API_QUOTA_GATE_SCRIPT: &str = include_str!("../../../assets/inject/api-quota-gate.js");
+const NATIVE_FAST_UNLOCK_SCRIPT: &str = concat!(
+    include_str!("../../../assets/inject/native-fast-unlock.js"),
+    "\n",
+    include_str!("../../../assets/inject/native-fast-rspack.js"),
+);
+const NATIVE_PREDICTIONS_SCRIPT: &str =
+    include_str!("../../../assets/inject/native-predictions.js");
+pub(crate) const NATIVE_THREAD_GOAL_SCRIPT: &str =
+    include_str!("../../../assets/inject/native-thread-goal.js");
 const STEPWISE_SCRIPT: &str = concat!(
     "(() => {\n",
     include_str!("../../../assets/inject/floating-panel/runtime/state.js"),
@@ -70,7 +185,7 @@ const STEPWISE_SCRIPT: &str = concat!(
     "\n})();\n",
 );
 pub const DIAGNOSTIC_BUILD_ID: &str = "diag-20260518-1";
-const DREAM_SKIN_RENDERER_REVISION: &str = "23-official-lifecycle-1.5.20";
+const DREAM_SKIN_RENDERER_REVISION: &str = "27-dream-skin-1.5.20-wallpaper-shell";
 
 pub fn renderer_script() -> &'static str {
     RENDERER_SCRIPT
@@ -135,7 +250,9 @@ fn dream_skin_target_runtime_script(settings: &BackendSettings, include_art: boo
 
     let (engine, renderer, base_css) = dream_skin_target_assets(settings);
     let managed_css = managed_dream_skin_css(settings);
-    let css = format!("{base_css}\n{managed_css}");
+    // 原生 shell 兼容属于基础主题：内置图片和没有 Safe CSS 的图片也必须可达。
+    let native_shell_css = include_str!("../../../assets/inject/dream-skin-native-shell-compat.css");
+    let css = format!("{base_css}\n{native_shell_css}\n{managed_css}");
     let theme = serde_json::to_string(&settings.codex_app_dream_skin_theme_config)
         .expect("dream skin target theme should serialize");
     let style_revision = dream_skin_content_signature(css.as_bytes());
@@ -174,7 +291,8 @@ fn dream_skin_target_runtime_script(settings: &BackendSettings, include_art: boo
         )
         .replace(
             "__DREAM_SKIN_VERSION_JSON__",
-            &serde_json::to_string("1.5.20").unwrap(),
+            &serde_json::to_string(crate::dream_skin_package::DREAM_SKIN_PACKAGE_CLIENT_VERSION)
+                .unwrap(),
         )
         .replace(
             "__DREAM_SKIN_STYLE_REVISION_JSON__",
@@ -242,7 +360,10 @@ fn managed_dream_skin_css(settings: &BackendSettings) -> String {
     let Ok(css) = std::fs::read_to_string(css_path) else {
         return String::new();
     };
-    crate::dream_skin_package::compile_safe_css(&css).unwrap_or_default()
+    let Ok(compiled) = crate::dream_skin_package::compile_safe_css(&css) else {
+        return String::new();
+    };
+    format!("{compiled}\n{DREAM_SKIN_COMMUNITY_COMPAT_CSS}")
 }
 
 fn dream_skin_skin_api_bootstrap_script(theme: &str) -> String {
@@ -327,6 +448,18 @@ pub fn pet_real_mouse_script() -> &'static str {
     PET_REAL_MOUSE_SCRIPT
 }
 
+pub fn api_quota_gate_script() -> &'static str {
+    API_QUOTA_GATE_SCRIPT
+}
+
+pub fn native_fast_unlock_script() -> &'static str {
+    NATIVE_FAST_UNLOCK_SCRIPT
+}
+
+pub fn native_predictions_script() -> &'static str {
+    NATIVE_PREDICTIONS_SCRIPT
+}
+
 const PET_V2_SPRITE_DETECTION_SCRIPT: &str = r#"
   const isV2Sprite = async (mascot) => {
     if (!mascot) return false;
@@ -370,6 +503,10 @@ const PET_V2_SPRITE_DETECTION_SCRIPT: &str = r#"
     return false;
   };
 "#;
+
+pub fn pet_real_mouse_hook_probe_script() -> &'static str {
+    r#"typeof window.__codexPlusPetRealMouseLook?.updateScreenPoint === "function""#
+}
 
 pub fn pet_real_mouse_capability_probe_script() -> String {
     let mut script = String::from(
@@ -417,19 +554,10 @@ pub fn pet_real_mouse_capability_probe_script() -> String {
 }
 
 pub fn pet_real_mouse_update_script(x: i32, y: i32) -> String {
-    let mut script = String::from(
-        r#"(async () => {
-  const mascot = document.querySelector('[data-avatar-mascot="true"]');
-"#,
-    );
-    script.push_str(PET_V2_SPRITE_DETECTION_SCRIPT);
-    script.push_str(&format!(
-        r#"
-  return await isV2Sprite(mascot)
-    && window.__codexPlusPetRealMouseLook?.updateScreenPoint?.({{ x: {x}, y: {y} }}) === true;
-}})()"#
-    ));
-    script
+    // 只要页面上有 updateScreenPoint 就推坐标。不能绑 V2 精灵图或 vscode dispatcher。
+    format!(
+        "window.__codexPlusPetRealMouseLook?.updateScreenPoint?.({{ x: {x}, y: {y} }}) === true;"
+    )
 }
 
 pub fn pet_real_mouse_stop_script() -> &'static str {
@@ -445,18 +573,98 @@ pub fn hide_official_usage_alert_config(settings: &BackendSettings) -> bool {
     profile.relay_mode == crate::settings::RelayMode::Official && profile.official_mix_api_key
 }
 
+pub fn force_chinese_locale_config(settings: &BackendSettings) -> Value {
+    json!({ "enabled": settings.codex_app_force_chinese_locale, "locale": "zh-CN" })
+}
+
+/// Statsig 界面增强的注入配置。
+///
+/// 只包含「纯客户端」的远程开关：隐藏升级/额度推销、放宽网络与流式超时、补开记忆。
+/// 服务端校验的能力（云端任务、真实配额）不在这里，也改不动。
+pub fn statsig_overrides_config(settings: &BackendSettings) -> Value {
+    json!({
+        "enabled": settings.codex_app_statsig_overrides,
+        // 布尔闸门：值为 true 时强制打开。
+        "gates": {
+            // 抑制升级 / 额度推销提示（ChatGPT 界面侧）
+            "1174206456": true
+        },
+        // 动态配置：按 key 覆盖，未列出的 key 保持远端下发值。
+        "dynamicConfigs": {
+            // 网络重试：更耐心的退避，弱网下少断流
+            "3165814200": {
+                "MIN_RETRY_INTERVAL": 400,
+                "MAX_RETRY_INTERVAL": 8000,
+                "RETRY_FACTOR": 1.6,
+                "MAX_RETRY_COUNT": 15
+            },
+            // SSE 首包 / 字节间隔超时
+            "3608673692": {
+                "sse_initial_open_timeout_ms": 90000,
+                "sse_between_bytes_timeout_ms": 90000
+            },
+            // WebSocket 空闲超时
+            "339548201": {
+                "websocket_initial_idle_timeout_ms": 15000,
+                "websocket_idle_timeout_ms": 45000
+            },
+            // 记忆：只打开 Statsig 侧开关；Codex 本体的 features.memories 仍需另开
+            "2808262316": { "enabled": true }
+        }
+    })
+}
+
+fn renderer_after_document_ready(script: &str) -> String {
+    format!(
+        "(()=>{{const start=()=>{{{script}\n}};if(document.body)start();else document.addEventListener('DOMContentLoaded',start,{{once:true}});}})();"
+    )
+}
+
+/// 注入脚本里的皮肤运行时：等文档就绪再安装（#2680）。
+///
+/// 注入脚本同时登记为新文档脚本；只要启动器发过 Page.enable（开了原生 Fast / 输入预测），
+/// Page.reload、启动壳自救重载等每次新文档都会在根节点建立前执行它。这时
+/// `document.documentElement` 为空，皮肤 API 引导里的 `root.style.setProperty` 和
+/// `observer.observe(document.documentElement)` 直接抛错，整个皮肤运行时没装上，
+/// 页面里只剩 Codex++ 的其它增强，看起来就是「重启 Codex 后皮肤不生效」。
+/// 实时注入（Runtime.evaluate，body 已在）仍立即执行；没开皮肤时为空串，不加任何包装。
+fn dream_skin_target_runtime_after_document_ready(settings: &BackendSettings) -> String {
+    let runtime = dream_skin_target_runtime_script(settings, false);
+    if runtime.is_empty() {
+        return runtime;
+    }
+    renderer_after_document_ready(&runtime)
+}
+
 pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettings) -> String {
     let helper_url = format!("http://127.0.0.1:{helper_port}");
-    let image_overlay = image_overlay_config(helper_port, settings);
+    let instance_label = std::env::var("CODEX_PLUS_INSTANCE_LABEL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("CODEX_PLUS_INSTANCE_ID")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
+    let instance_identity = instance_label
+        .as_deref()
+        .and_then(|value| serde_json::to_string(value).ok())
+        .map(|value| format!("window.__CODEX_PLUS_INSTANCE_LABEL__ = {value};\n"))
+        .unwrap_or_default();
     let dream_skin_art = dream_skin_art_data_uri(settings);
     let dream_skin_art_signature = dream_skin_art_content_signature(settings);
     let dream_skin_theme = &settings.codex_app_dream_skin_theme_config;
-    let dream_skin_target_runtime = dream_skin_target_runtime_script(settings, false);
-    let plugin_marketplaces = local_plugin_marketplaces();
+    let dream_skin_target_runtime = dream_skin_target_runtime_after_document_ready(settings);
     let paste_fix = paste_fix_enabled_config(settings);
     let force_chinese_locale = force_chinese_locale_config(settings);
-    let fast_startup = fast_startup_config(settings);
+    let statsig_overrides = statsig_overrides_config(settings);
     let hide_official_usage_alert = hide_official_usage_alert_config(settings);
+    // 原生模块补丁的新文档脚本需要 Page.enable；DOM 增强必须等正常文档就绪，不能访问空的根节点。
+    let renderer_runtime = if crate::native_predictions::native_modules_requested(settings) {
+        renderer_after_document_ready(renderer_script())
+    } else {
+        renderer_script().to_string()
+    };
     let stepwise_runtime =
         if settings.codex_app_stepwise_enabled || settings.codex_app_answer_outline_enabled {
             stepwise_script()
@@ -464,12 +672,11 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
             ""
         };
     format!(
-        "window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.__CODEX_PLUS_VERSION__ = {};\nwindow.__CODEX_PLUS_BUILD__ = {};\nwindow.__CODEX_PLUS_IMAGE_OVERLAY__ = {};\nwindow.__CODEX_PLUS_PLUGIN_MARKETPLACES__ = {};\nwindow.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ = true;\nwindow.__CODEX_PLUS_DREAM_SKIN_PLATFORM__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_REVISION__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_ART__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_THEME__ = {};\nwindow.__CODEX_PLUS_PASTE_FIX__ = {};\nwindow.__CODEX_PLUS_FORCE_CHINESE_LOCALE__ = {};\nwindow.__CODEX_PLUS_FAST_STARTUP__ = {};\nwindow.__CODEX_PLUS_HIDE_OFFICIAL_USAGE_ALERT__ = {};\n{}\n{}\n{}",
+        "{}window.__CODEX_SESSION_DELETE_HELPER__ = {};\nwindow.__CODEX_PLUS_VERSION__ = {};\nwindow.__CODEX_PLUS_BUILD__ = {};\nwindow.__CODEX_PLUS_EXTERNAL_DREAM_SKIN_RUNTIME__ = true;\nwindow.__CODEX_PLUS_DREAM_SKIN_PLATFORM__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_REVISION__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_ART__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_ART_SIGNATURE__ = {};\nwindow.__CODEX_PLUS_DREAM_SKIN_THEME__ = {};\nwindow.__CODEX_PLUS_PASTE_FIX__ = {};\nwindow.__CODEX_PLUS_FORCE_CHINESE_LOCALE__ = {};\nwindow.__CODEX_PLUS_STATSIG_OVERRIDES__ = {};\nwindow.__CODEX_PLUS_HIDE_OFFICIAL_USAGE_ALERT__ = {};\n{}\n{}\n{}",
+        instance_identity,
         serde_json::to_string(&helper_url).expect("helper URL should serialize"),
         serde_json::to_string(crate::version::VERSION).expect("version should serialize"),
         serde_json::to_string(DIAGNOSTIC_BUILD_ID).expect("build id should serialize"),
-        serde_json::to_string(&image_overlay).expect("image overlay config should serialize"),
-        serde_json::to_string(&plugin_marketplaces).expect("plugin marketplaces should serialize"),
         serde_json::to_string(dream_skin_platform()).expect("dream skin platform should serialize"),
         serde_json::to_string(DREAM_SKIN_RENDERER_REVISION)
             .expect("dream skin renderer revision should serialize"),
@@ -480,13 +687,21 @@ pub fn injection_script_with_settings(helper_port: u16, settings: &BackendSettin
         serde_json::to_string(&paste_fix).expect("paste fix config should serialize"),
         serde_json::to_string(&force_chinese_locale)
             .expect("force Chinese locale config should serialize"),
-        serde_json::to_string(&fast_startup).expect("fast startup config should serialize"),
+        serde_json::to_string(&statsig_overrides)
+            .expect("statsig overrides config should serialize"),
         serde_json::to_string(&hide_official_usage_alert)
             .expect("usage alert config should serialize"),
         format!(
-            "{}\n{}",
+            "{}\n{}\n{}",
             include_str!("../../../assets/inject/composer-readiness.js"),
-            renderer_script()
+            format!(
+                "{}\nwindow.__codexPlusNativeFastUnlock.runtime.update({});\n{}\nwindow.__codexPlusNativePredictions.runtime.update({});",
+                native_fast_unlock_script(),
+                json!(crate::native_fast::runtime_settings(settings)),
+                native_predictions_script(),
+                json!(crate::native_predictions::runtime_settings(settings)),
+            ),
+            format!("{}\n{}", NATIVE_THREAD_GOAL_SCRIPT, renderer_runtime)
         ),
         stepwise_runtime,
         dream_skin_target_runtime,
@@ -534,219 +749,8 @@ fn dream_skin_content_signature(value: &[u8]) -> String {
     format!("{}-{hash:x}", value.len())
 }
 
-fn local_plugin_marketplaces() -> Value {
-    let home = crate::codex_home::default_codex_home_dir();
-    local_plugin_marketplaces_from_home(&home)
-}
-
-fn local_plugin_marketplaces_from_home(home: &Path) -> Value {
-    let installed_plugins = installed_plugins_from_config(&home);
-    let marketplace_dir = home
-        .join(".tmp")
-        .join("plugins")
-        .join(".agents")
-        .join("plugins");
-    let candidates = [
-        marketplace_dir.join("marketplace.json"),
-        marketplace_dir.join("api_marketplace.json"),
-        home.join(".tmp")
-            .join("plugins-remote")
-            .join(".agents")
-            .join("plugins")
-            .join("marketplace.json"),
-    ];
-    let marketplaces = candidates
-        .iter()
-        .filter_map(|path| {
-            let text = std::fs::read_to_string(path).ok()?;
-            let mut marketplace: Value = serde_json::from_str(&text).ok()?;
-            expand_local_plugin_marketplace(&mut marketplace, path, &home, &installed_plugins);
-            if let Some(object) = marketplace.as_object_mut() {
-                object
-                    .entry("path")
-                    .or_insert_with(|| Value::String(path.to_string_lossy().to_string()));
-            }
-            Some(marketplace)
-        })
-        .collect::<Vec<_>>();
-    Value::Array(marketplaces)
-}
-
-fn expand_local_plugin_marketplace(
-    marketplace: &mut Value,
-    marketplace_path: &Path,
-    home: &Path,
-    installed_plugins: &std::collections::BTreeSet<String>,
-) {
-    let marketplace_name = marketplace
-        .get("name")
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    let Some(plugins) = marketplace.get_mut("plugins").and_then(Value::as_array_mut) else {
-        return;
-    };
-    let marketplace_root = marketplace_path
-        .ancestors()
-        .nth(3)
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| home.join(".tmp").join("plugins"));
-    for plugin in plugins {
-        let Some(plugin_object) = plugin.as_object_mut() else {
-            continue;
-        };
-        let plugin_name = plugin_object
-            .get("name")
-            .and_then(Value::as_str)
-            .map(str::to_string)
-            .or_else(|| {
-                plugin_object
-                    .get("id")
-                    .and_then(Value::as_str)
-                    .and_then(|id| id.split('@').next())
-                    .map(str::to_string)
-            })
-            .unwrap_or_default();
-        if plugin_name.is_empty() {
-            continue;
-        }
-        let manifest_path = marketplace_root
-            .join("plugins")
-            .join(&plugin_name)
-            .join(".codex-plugin")
-            .join("plugin.json");
-        let plugin_root = marketplace_root.join("plugins").join(&plugin_name);
-        if let Some(manifest) = plugin_manifest(&manifest_path) {
-            merge_plugin_manifest(plugin_object, manifest);
-        }
-        absolutize_plugin_icon_paths(plugin_object, &plugin_root);
-        plugin_object
-            .entry("name".to_string())
-            .or_insert_with(|| Value::String(plugin_name.clone()));
-        plugin_object
-            .entry("id".to_string())
-            .or_insert_with(|| Value::String(format!("{plugin_name}@{marketplace_name}")));
-        plugin_object
-            .entry("marketplaceName".to_string())
-            .or_insert_with(|| Value::String(marketplace_name.clone()));
-        plugin_object
-            .entry("marketplacePath".to_string())
-            .or_insert_with(|| Value::String(marketplace_name.clone()));
-        plugin_object
-            .entry("keywords".to_string())
-            .or_insert_with(|| Value::Array(Vec::new()));
-        plugin_object.insert(
-            "installed".to_string(),
-            Value::Bool(installed_plugins.contains(&format!("{plugin_name}@{marketplace_name}"))),
-        );
-    }
-}
-
-fn absolutize_plugin_icon_paths(plugin: &mut Map<String, Value>, plugin_root: &Path) {
-    for key in ["composerIconPath", "logoPath"] {
-        absolutize_string_field(plugin, key, plugin_root);
-    }
-    let Some(interface) = plugin.get_mut("interface").and_then(Value::as_object_mut) else {
-        return;
-    };
-    for key in ["composerIcon", "composerIconUrl", "logo", "logoUrl"] {
-        absolutize_string_field(interface, key, plugin_root);
-    }
-}
-
-fn absolutize_string_field(object: &mut Map<String, Value>, key: &str, root: &Path) {
-    let Some(value) = object.get(key).and_then(Value::as_str).map(str::to_string) else {
-        return;
-    };
-    let Some(path) = absolutize_plugin_asset_path(&value, root) else {
-        return;
-    };
-    object.insert(key.to_string(), Value::String(path));
-}
-
-fn absolutize_plugin_asset_path(value: &str, root: &Path) -> Option<String> {
-    let trimmed = value.trim();
-    if trimmed.is_empty()
-        || trimmed.starts_with("data:")
-        || trimmed.starts_with("http:")
-        || trimmed.starts_with("https:")
-        || trimmed.starts_with("file:")
-        || Path::new(trimmed).is_absolute()
-    {
-        return None;
-    }
-    let relative = trimmed.strip_prefix("./").unwrap_or(trimmed);
-    Some(root.join(relative).to_string_lossy().to_string())
-}
-
-fn plugin_manifest(path: &Path) -> Option<Map<String, Value>> {
-    let text = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str::<Value>(&text)
-        .ok()?
-        .as_object()
-        .cloned()
-}
-
-fn merge_plugin_manifest(plugin: &mut Map<String, Value>, manifest: Map<String, Value>) {
-    for (key, value) in manifest {
-        plugin.entry(key).or_insert(value);
-    }
-}
-
-fn installed_plugins_from_config(home: &Path) -> std::collections::BTreeSet<String> {
-    let text = std::fs::read_to_string(home.join("config.toml")).unwrap_or_default();
-    let doc = text.parse::<toml_edit::DocumentMut>().ok();
-    let Some(plugins) = doc
-        .as_ref()
-        .and_then(|doc| doc.get("plugins"))
-        .and_then(toml_edit::Item::as_table)
-    else {
-        return std::collections::BTreeSet::new();
-    };
-    plugins
-        .iter()
-        .filter_map(|(id, item)| {
-            let enabled = item
-                .get("enabled")
-                .and_then(toml_edit::Item::as_bool)
-                .unwrap_or(false);
-            enabled.then(|| id.to_string())
-        })
-        .collect()
-}
-
-pub fn image_overlay_config(helper_port: u16, settings: &BackendSettings) -> Value {
-    let has_path = !settings.codex_app_image_overlay_path.trim().is_empty();
-    let enabled = settings.codex_app_image_overlay_enabled && has_path;
-    let data_url = if enabled {
-        image_file_data_uri(Path::new(settings.codex_app_image_overlay_path.trim()))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
-    json!({
-        "enabled": enabled && !data_url.is_empty(),
-        "opacity": f64::from(settings.codex_app_image_overlay_opacity.clamp(1, 100)) / 100.0,
-        "fitMode": settings.codex_app_image_overlay_fit_mode.as_str(),
-        "dataUrl": data_url,
-        "imageUrl": if enabled {
-            format!("http://127.0.0.1:{helper_port}/overlay/image")
-        } else {
-            String::new()
-        },
-    })
-}
-
 pub fn paste_fix_enabled_config(settings: &BackendSettings) -> Value {
     json!({ "enabled": settings.codex_app_paste_fix })
-}
-
-pub fn force_chinese_locale_config(settings: &BackendSettings) -> Value {
-    json!({ "enabled": settings.codex_app_force_chinese_locale, "locale": "zh-CN" })
-}
-
-pub fn fast_startup_config(settings: &BackendSettings) -> Value {
-    json!({ "enabled": settings.codex_app_fast_startup, "statsigTimeoutMs": 800 })
 }
 
 fn image_data_uri(mime_type: &str, bytes: &[u8]) -> String {
@@ -756,7 +760,7 @@ fn image_data_uri(mime_type: &str, bytes: &[u8]) -> String {
     )
 }
 
-fn image_file_data_uri(path: &Path) -> Option<String> {
+pub(crate) fn image_file_data_uri(path: &Path) -> Option<String> {
     let mime_type = image_content_type(path)?;
     let bytes = std::fs::read(path).ok()?;
     Some(image_data_uri(mime_type, &bytes))
@@ -783,92 +787,187 @@ mod tests {
     use super::*;
 
     #[test]
-    fn image_overlay_config_includes_fit_mode() {
-        let settings = BackendSettings {
-            codex_app_image_overlay_fit_mode: "fill".to_string(),
-            ..BackendSettings::default()
-        };
-        let config = image_overlay_config(57321, &settings);
+    fn native_fast_renderer_waits_for_dom_and_reinjection_runs_immediately() {
+        let wrapped = renderer_after_document_ready("window.started=(window.started||0)+1;");
+        let test = format!(r#"
+          const vm=require('node:vm'),assert=require('node:assert/strict');
+          for(const ready of [false,true]){{
+            let listener;
+            const window={{}},document={{body:ready?{{}}:null,addEventListener:(name,callback,options)=>{{
+              assert.equal(name,'DOMContentLoaded');assert.equal(options.once,true);listener=callback;
+            }}}};
+            vm.runInNewContext({},{{window,document}});
+            assert.equal(window.started,ready?1:undefined);
+            if(!ready){{document.body={{}};listener();assert.equal(window.started,1);}}
+          }}
+        "#, serde_json::to_string(&wrapped).unwrap());
+        let output = std::process::Command::new("node").arg("-e").arg(test).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
 
-        assert_eq!(config["fitMode"].as_str(), Some("fill"));
+    // 回归 #2680：注入脚本作为新文档脚本执行时根节点还不存在，皮肤运行时必须等文档就绪。
+    #[test]
+    fn dream_skin_runtime_in_injection_waits_for_document_ready() {
+        let mut settings = BackendSettings::default();
+        settings.codex_app_dream_skin_enabled = true;
+        let runtime = dream_skin_target_runtime_script(&settings, false);
+        assert!(!runtime.is_empty());
+        let script = injection_script_with_settings(57321, &settings);
+        assert!(script.contains(&renderer_after_document_ready(&runtime)));
+        // 皮肤运行时只出现在包装里，不能另有一份在根节点建立前直接执行。
+        assert_eq!(script.matches(runtime.as_str()).count(), 1);
+
+        // 没开或暂停皮肤时不注入任何皮肤运行时，也不加包装。
+        for (enabled, paused) in [(false, false), (true, true)] {
+            settings.codex_app_dream_skin_enabled = enabled;
+            settings.codex_app_dream_skin_paused = paused;
+            assert!(dream_skin_target_runtime_after_document_ready(&settings).is_empty());
+        }
     }
 
     #[test]
-    fn local_plugin_marketplaces_includes_api_marketplace_snapshot() {
+    fn dream_skin_api_bootstrap_throws_before_root_but_wrapped_installs_after_ready() {
+        let bootstrap = dream_skin_skin_api_bootstrap_script(r##"{"colors":{"background":"#102030"}}"##);
+        let test = format!(r#"
+          const vm=require('node:vm'),assert=require('node:assert/strict');
+          const run=(source)=>{{
+            let listener=null,observed=null;
+            const props={{}};
+            const root={{style:{{setProperty:(name,value)=>{{props[name]=value;}}}}}};
+            // 与 Chromium 新文档脚本一致：根节点、head、body 都还是 null。
+            const document={{documentElement:null,body:null,querySelectorAll:()=>[],
+              addEventListener:(name,callback,options)=>{{
+                assert.equal(name,'DOMContentLoaded');assert.equal(options.once,true);listener=callback;
+              }}}};
+            class MutationObserver{{
+              observe(node){{if(!node)throw new TypeError("parameter 1 is not of type 'Node'");observed=node;}}
+              disconnect(){{}}
+            }}
+            const window={{}};
+            vm.runInNewContext(source,{{window,document,MutationObserver,setTimeout,clearTimeout}});
+            return {{document,root,props,ready:()=>{{document.documentElement=root;document.body={{}};listener();}},observed:()=>observed}};
+          }};
+          // 未包装：新文档阶段直接抛错，整份皮肤运行时就此中断。
+          // vm 里抛出的 TypeError 属于另一个 realm，按 name 判断。
+          assert.throws(()=>run({raw}),(error)=>error.name==='TypeError');
+          // 包装后：新文档阶段不碰 DOM，文档就绪时正常写主题变量、监听根节点。
+          const env=run({wrapped});
+          assert.deepEqual(env.props,{{}});
+          env.ready();
+          assert.equal(env.props['--ds-theme-color-background'],'#102030');
+          assert.equal(env.observed(),env.root);
+        "#,
+            raw = serde_json::to_string(&bootstrap).unwrap(),
+            wrapped = serde_json::to_string(&renderer_after_document_ready(&bootstrap)).unwrap(),
+        );
+        let output = std::process::Command::new("node").arg("-e").arg(test).output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[test]
+    fn native_shell_compatibility_is_present_without_managed_safe_css() {
         let temp = tempfile::tempdir().unwrap();
-        let home = temp.path();
-        let marketplace_dir = home
-            .join(".tmp")
-            .join("plugins")
-            .join(".agents")
-            .join("plugins");
-        let api_plugin_dir = home
-            .join(".tmp")
-            .join("plugins")
-            .join("plugins")
-            .join("build-web-apps");
-        let remote_marketplace_dir = home
-            .join(".tmp")
-            .join("plugins-remote")
-            .join(".agents")
-            .join("plugins");
-        let remote_plugin_dir = home
-            .join(".tmp")
-            .join("plugins-remote")
-            .join("plugins")
-            .join("product-design");
-        std::fs::create_dir_all(&marketplace_dir).unwrap();
-        std::fs::create_dir_all(&remote_marketplace_dir).unwrap();
-        std::fs::create_dir_all(api_plugin_dir.join(".codex-plugin")).unwrap();
-        std::fs::create_dir_all(remote_plugin_dir.join(".codex-plugin")).unwrap();
-        std::fs::write(
-            marketplace_dir.join("marketplace.json"),
-            r#"{"name":"openai-curated","plugins":[{"name":"gmail"}]}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            marketplace_dir.join("api_marketplace.json"),
-            r#"{"name":"openai-api-curated","plugins":[{"name":"build-web-apps"}]}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            remote_marketplace_dir.join("marketplace.json"),
-            r#"{"name":"openai-curated-remote","plugins":[{"name":"product-design"}]}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            api_plugin_dir.join(".codex-plugin").join("plugin.json"),
-            r#"{"interface":{"displayName":"Build Web Apps"}}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            remote_plugin_dir.join(".codex-plugin").join("plugin.json"),
-            r#"{"interface":{"displayName":"Product Design"}}"#,
-        )
-        .unwrap();
+        for image in [String::new(), temp.path().join("selected.png").to_string_lossy().into_owned()] {
+            let mut settings = BackendSettings::default();
+            settings.codex_app_dream_skin_enabled = true;
+            settings.codex_app_dream_skin_image_path = image;
+            assert!(managed_dream_skin_css(&settings).is_empty());
+            let script = dream_skin_target_runtime_script(&settings, false);
+            assert!(script.contains("全尺寸 shell"));
+            settings.codex_app_dream_skin_paused = true;
+            assert!(dream_skin_target_runtime_script(&settings, false).is_empty());
+        }
+    }
 
-        let marketplaces = local_plugin_marketplaces_from_home(home);
-        let array = marketplaces.as_array().unwrap();
+    #[test]
+    fn injection_does_not_project_retired_plugin_cache() {
+        let script = injection_script_with_settings(57321, &BackendSettings::default());
+        assert!(!script.contains("window.__CODEX_PLUS_PLUGIN_MARKETPLACES__ ="));
+    }
 
-        assert_eq!(array.len(), 3);
-        assert_eq!(array[0]["name"].as_str(), Some("openai-curated"));
-        assert_eq!(array[1]["name"].as_str(), Some("openai-api-curated"));
-        assert_eq!(array[2]["name"].as_str(), Some("openai-curated-remote"));
-        assert_eq!(
-            array[1]["plugins"][0]["interface"]["displayName"].as_str(),
-            Some("Build Web Apps")
-        );
-        assert_eq!(
-            array[2]["plugins"][0]["interface"]["displayName"].as_str(),
-            Some("Product Design")
-        );
-        assert_eq!(
-            array[2]["plugins"][0]["marketplaceName"].as_str(),
-            Some("openai-curated-remote")
-        );
-        assert_eq!(
-            array[2]["plugins"][0]["marketplacePath"].as_str(),
-            Some("openai-curated-remote")
-        );
+    #[test]
+    fn pet_media_is_not_embedded_in_the_injection_script() {
+        // 桌宠与大肥鱼改成了 Agent 桌宠拓展：引擎随拓展包发布，素材经 /whale/media 取，注入脚本不再带它们。
+        let script = injection_script(57321);
+        assert!(!script.contains("__CODEX_PLUS_WHALE_ENGINE__"));
+        assert!(!script.contains("__CODEX_PLUS_WHALE_ASSETS__"));
+        assert!(!script.contains("__CODEX_PLUS_AGENT_PET_SOUNDS__"));
+    }
+
+    #[test]
+    fn whale_media_preserves_original_audio_and_animation_bytes() {
+        let media = whale_media();
+        assert_eq!(media["status"], "ok");
+        let values = &media["assets"];
+        assert_eq!(values.as_object().unwrap().len(), 10);
+        for (name, mime, expected) in WHALE_MEDIA {
+            let uri = values[*name].as_str().unwrap();
+            let prefix = format!("data:{mime};base64,");
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(uri.strip_prefix(&prefix).unwrap())
+                .unwrap();
+            assert_eq!(&decoded, expected);
+        }
+        let image = base64::engine::general_purpose::STANDARD
+            .decode(media["image"].as_str().unwrap().strip_prefix("data:image/png;base64,").unwrap())
+            .unwrap();
+        assert_eq!(image, WHALE_DEFAULT_IMAGE);
+        // 桌宠按压音与大肥鱼内置音效是同一份原样素材。
+        let sounds = agent_pet_sounds();
+        assert_eq!(sounds["duck"]["press"], values["Ya1.mp3"]);
+        assert_eq!(sounds["fx1"]["release"], values["D2.mp3"]);
+    }
+
+    #[test]
+    fn community_shell_css_only_changes_native_surface_paint_and_insets() {
+        let css = DREAM_SKIN_COMMUNITY_COMPAT_CSS;
+        assert!(css.contains("[data-codex-os=\"win32\"]"));
+        assert!(css.contains("[data-dream-task-mode=\"full\"]"));
+        assert!(css.contains("--app-shell-titlebar-height: 0px"));
+        assert!(css.contains("[data-app-action-timeline-scroll]"));
+        assert!(css.contains("[role=\"menu\"]"));
+        for excluded in [
+            "opacity:",
+            "z-index:",
+            "position:",
+            "img",
+            "canvas",
+            "video",
+        ] {
+            assert!(
+                !css.contains(excluded),
+                "unexpected media/layer override: {excluded}"
+            );
+        }
+    }
+
+    #[test]
+    fn wallpaper_shell_compatibility_is_gated_and_preserves_theme_colors() {
+        let css = DREAM_SKIN_COMMUNITY_COMPAT_CSS;
+        let wallpaper_rules = css.split("@layer theme {").nth(1).unwrap();
+        for rule in wallpaper_rules.split('}').filter(|rule| rule.contains('{')) {
+            let selector = rule.split('{').next().unwrap();
+            for guard in [
+                "[data-dream-skin=\"active\"]",
+                "[data-dream-art-ready=\"true\"]",
+                "[data-dream-art-wide=\"true\"]",
+                "[data-dream-task-mode=\"ambient\"]",
+                "[data-dream-task-mode=\"banner\"]",
+                "[data-dream-task-mode=\"full\"]",
+            ] {
+                assert!(
+                    selector.contains(guard),
+                    "unguarded wallpaper rule: {selector}"
+                );
+            }
+        }
+        assert!(wallpaper_rules.contains("_PageSurfaceLayout_"));
+        assert!(wallpaper_rules.contains("main[data-app-shell-main-surface]"));
+        assert!(wallpaper_rules.contains("background-color: transparent !important"));
+        assert!(wallpaper_rules.contains("rgb(var(--ds-panel-rgb) / .68)"));
+        assert!(wallpaper_rules.contains("color: var(--ds-text) !important"));
+        assert!(wallpaper_rules.contains("[data-app-shell-titlebar=\"true\"]"));
+        assert!(wallpaper_rules.contains("#codex-plus-usage-statusline"));
+        assert!(wallpaper_rules.contains(".codex-token-usage-badge"));
     }
 }

@@ -54,13 +54,15 @@ test("UGQai replaces TorchAI while preserving the configured models", () => {
   assert.deepEqual(preset.modelList, ["gpt-5.6-sol", "codex-auto-review", "gpt-5.4", "gpt-5.4-mini", "gpt-5.5", "gpt-5.6-terra"]);
 });
 
-test("GrooRoute preset uses the configured sponsor endpoint", () => {
-  const preset = PRESETS.find((candidate) => candidate.id === "grooroute");
+// GrooRoute 赞助已于 2026-10-15 到期：预设与推广链接一并下线。
+test("expired GrooRoute sponsor preset is removed", () => {
+  assert.equal(PRESETS.some((candidate) => candidate.id === "grooroute"), false);
+});
+
+test("RunAPI preset uses the current v1 Base URL", () => {
+  const preset = PRESETS.find((candidate) => candidate.id === "runapi");
   assert.ok(preset);
-  assert.equal(preset.name, "GrooRoute");
-  assert.equal(preset.baseUrl, "https://grooroute.com");
+  assert.equal(preset.baseUrl, "https://runapi.host/v1");
   assert.equal(preset.protocol, "responses");
-  assert.equal(preset.model, "gpt-5.5");
-  assert.equal(preset.apiKeyUrl, "https://grooroute.com/register?aff=2B3KJR5SRNTX");
 });
 });

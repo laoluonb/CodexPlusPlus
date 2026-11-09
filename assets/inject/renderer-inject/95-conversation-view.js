@@ -1,5 +1,7 @@
   function ensureConversationViewRuntime() {
     if (conversationViewState.runtimeStarted) return;
+    document.addEventListener("compositionstart", onConversationViewCompositionStart, true);
+    document.addEventListener("compositionend", onConversationViewCompositionEnd, true);
     conversationViewState.ro = conversationViewState.ro || new ResizeObserver(() => scheduleConversationViewAlign());
     conversationViewState.mo = conversationViewState.mo || new MutationObserver(() => scheduleConversationViewAlign());
     if (document.body && !conversationViewState.moObserved) {
@@ -186,6 +188,8 @@
   }
 
   function scanLightweight() {
+    // 轻量扫描里的拓展步骤（轮次回退、滚动位置恢复……），同样经 ctx.onScan 登记。
+    runCodexPlusScanSteps("light");
     installStyle();
     installCodexServiceTierDispatcherPatch();
     installCodexAppServerClientPrototypePatch();
@@ -196,30 +200,56 @@
         "existing-renderer"
       );
     }
+    // 拓展注册的图标栏入口也在这里补（见 installCodexPlusNavigationEntries）。
     installCodexPlusNavigationEntries();
-    // 拓展注册的图标栏入口与内置入口走同一条刷新路径：rail 渲染晚于注入，
-    // 所以要每轮扫描都补一次（内部靠 id 幂等，不会重复插入）。
-    refreshCodexPlusRailNavigation();
+    // 输入区 footer 会随会话切换、首页与对话页切换而重建，拓展的输入区按钮每轮补一次（按指纹幂等）。
+    refreshCodexPlusComposerActions();
+    // 消息插槽与侧边面板：消息、顶栏都会重建，按指纹幂等补齐；对话内容变化由插槽自己的观察器跟。
+    refreshCodexPlusMessageSlots();
+    refreshCodexPlusSidePanels();
+    refreshCodexPlusUiSlots();
     installCodexPlusPageNavigationCloseHandler();
-    installSessionShareImportListener();
-    localizeCodexMenus();
     scheduleBackendHeartbeat();
-    installDeleteButtonEventDelegation();
-    updateThreadScrollHandlers();
-    installThreadScrollProgrammaticScrollGuard();
-    installThreadScrollNavigationCapture();
-    installThreadScrollUserIntentCapture();
-    installThreadScrollRouteHooks();
-    scheduleThreadScrollSync(true);
-    refreshCodexServiceTierControls();
+  }
+
+  // 当前供应商是模型聚合时，按成员判断是否等同于「官登混入 Key」（#2704）：
+  // 成员里既有官方登录、又至少有一个走 API Key 的成员，官方额度用完时仍能经 API 成员发送。
+  // 与后端 active_aggregate_relay_profile 一致：activeAggregateRelayId 为空时取当前供应商 id，
+  // 不一致则视为没有生效的聚合。
+  function officialUsageAggregateMembers(profile) {
+    if (String(profile?.relayMode || "") !== "aggregate") return null;
+    const activeId = String(profile.id || "");
+    const aggregateId = String(codexPlusBackendSettings.activeAggregateRelayId || "").trim() || activeId;
+    if (!aggregateId || aggregateId !== activeId) return null;
+    const aggregates = Array.isArray(codexPlusBackendSettings.aggregateRelayProfiles)
+      ? codexPlusBackendSettings.aggregateRelayProfiles
+      : [];
+    const aggregate = aggregates.find((item) => String(item?.id || "") === aggregateId);
+    if (!aggregate || !Array.isArray(aggregate.members)) return null;
+    const relays = Array.isArray(codexPlusBackendSettings.relayProfiles) ? codexPlusBackendSettings.relayProfiles : [];
+    return aggregate.members
+      .map((member) => relays.find((item) => String(item?.id || "") === String(member?.relayId || "")))
+      .filter((member) => member && String(member.relayMode || "") !== "aggregate");
+  }
+
+  function officialUsageAggregateMixed(profile) {
+    const members = officialUsageAggregateMembers(profile);
+    if (!members) return false;
+    const hasOfficialLogin = members.some((member) => String(member.relayMode || "") === "official");
+    // 官登混入 Key 的成员本身也带 API Key；其余非官方成员都走 API Key。
+    const hasApiKey = members.some((member) => String(member.relayMode || "") !== "official"
+      || member.officialMixApiKey === true);
+    return hasOfficialLogin && hasApiKey;
   }
 
   function officialUsagePolicy() {
     // 新一代设置尚未返回时沿用最后一次真实配置，避免重新注入短暂恢复额度锁。
     if (!codexPlusBackendSettingsLoaded && officialUsageRuntime.lastPolicy) return officialUsageRuntime.lastPolicy;
     const profile = codexRemoteSessionActiveProfile();
-    const official = String(profile?.relayMode || "") === "official";
-    const mixed = official && profile?.officialMixApiKey === true;
+    const aggregateMixed = officialUsageAggregateMixed(profile);
+    const gateway = String(profile?.id || "") === "codex-plus-gateway";
+    const official = String(profile?.relayMode || "") === "official" || aggregateMixed || gateway;
+    const mixed = aggregateMixed || gateway || (official && profile?.officialMixApiKey === true);
     const policy = {
       official,
       hideAlerts: mixed,
@@ -253,7 +283,23 @@
       && queryKey[1] !== "image-generation";
   }
 
-  // 低额度提示和发送锁都只看当前是不是官登混入 Key。纯官登不改这份用量。
+  // Codex 26.1016 起还会按模型单独限额：additional_rate_limits 里当前模型那一条
+  // limit_reached 为 true 或 allowed 为 false 时，同样锁住发送（#2646）。
+  // 混入时一并解锁，只改这两个字段，其余额度信息不动。
+  function unlockAdditionalRateLimits(limits) {
+    if (!Array.isArray(limits)) return null;
+    let changed = false;
+    const next = limits.map((entry) => {
+      const rateLimit = entry?.rate_limit;
+      if (!rateLimit || typeof rateLimit !== "object") return entry;
+      if (rateLimit.allowed !== false && rateLimit.limit_reached !== true) return entry;
+      changed = true;
+      return { ...entry, rate_limit: { ...rateLimit, allowed: true, limit_reached: false } };
+    });
+    return changed ? next : null;
+  }
+
+  // 低额度提示和发送锁都只看当前是不是官登混入 Key（含官登 + API 成员的模型聚合）。纯官登不改这份用量。
   // 桌面端发送按钮读 rate_limit.allowed；limit_reached 为 true 也会被当成已用完。
   // 混入时在查询发布前把 allowed 写成 true，并清掉 limit_reached。
   // 百分比、重置时间、账号、积分和消费上限不动。图片额度横幅单独留下。
@@ -272,6 +318,13 @@
     const rateLimit = value.rate_limit;
     if (policy.unlockSend && (rateLimit.allowed !== true || rateLimit.limit_reached === true)) {
       next.rate_limit = { ...rateLimit, allowed: true, limit_reached: false };
+      changed = true;
+    }
+    const additionalRateLimits = policy.unlockSend
+      ? unlockAdditionalRateLimits(value.additional_rate_limits)
+      : null;
+    if (additionalRateLimits) {
+      next.additional_rate_limits = additionalRateLimits;
       changed = true;
     }
     if (policy.hideAlerts) {
@@ -546,887 +599,9 @@
     };
   }
 
-  let zedRemoteStatusPromise = null;
-  const zedRemoteMissingHostMessage = "Cannot determine remote SSH host for this file";
-
-  function showZedRemoteToast(message) {
-    document.querySelectorAll(`.${zedRemoteToastClass}`).forEach((node) => node.remove());
-    const toast = document.createElement("div");
-    toast.className = zedRemoteToastClass;
-    toast.textContent = message;
-    document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3200);
-  }
-
-  async function loadZedRemoteStatus() {
-    zedRemoteStatusPromise = zedRemoteStatusPromise || postJson("/zed-remote/status", {});
-    return zedRemoteStatusPromise;
-  }
-
-  async function resolveZedRemoteHost(hostId) {
-    const result = await postJson("/zed-remote/resolve-host", { hostId });
-    return result?.status === "ok" && result.ssh ? result.ssh : null;
-  }
-
-  function zedRemoteIsRemoteHostId(hostId) {
-    return zedRemoteString(hostId).startsWith("remote-ssh-");
-  }
-
-  function zedRemoteProjectIdFromRow(row) {
-    const projectList = row?.closest?.("[data-app-action-sidebar-project-list-id]");
-    const projectId = zedRemoteString(projectList?.getAttribute?.("data-app-action-sidebar-project-list-id"));
-    if (projectId) return projectId;
-    const projectRow = row?.closest?.("[data-app-action-sidebar-project-id]");
-    return zedRemoteString(projectRow?.getAttribute?.("data-app-action-sidebar-project-id"));
-  }
-
-  function zedRemoteWorkspaceRootFromObject(source) {
-    if (!source || typeof source !== "object") return "";
-    for (const key of ["remoteWorkspaceRoot", "workspaceRoot", "displayCwd", "cwd", "rootPath", "workingDirectory", "workingDir"]) {
-      const workspaceRoot = zedRemoteString(source[key]);
-      if (workspaceRoot.startsWith("/") && !/\/\.codex$/.test(workspaceRoot)) return workspaceRoot;
-    }
-    const hostConfig = source.hostConfig || source.sshHostConfig || source.remoteHostConfig || source.ssh || {};
-    for (const key of ["remoteWorkspaceRoot", "workspaceRoot", "rootPath", "cwd"]) {
-      const workspaceRoot = zedRemoteString(hostConfig[key]);
-      if (workspaceRoot.startsWith("/") && !/\/\.codex$/.test(workspaceRoot)) return workspaceRoot;
-    }
-    return "";
-  }
-
-  function zedRemoteWorkspaceRootFromElement(element) {
-    for (const key of zedRemoteReactKeys(element)) {
-      const workspaceRoot = zedRemoteWalkObject(element[key], zedRemoteWorkspaceRootFromObject, { maxDepth: 10, maxNodes: 320 });
-      if (workspaceRoot) return workspaceRoot;
-    }
-    return "";
-  }
-
-  function zedRemoteWorkspaceRootFromRow(row) {
-    for (let node = row; node && node !== document.body; node = node.parentElement) {
-      const workspaceRoot = zedRemoteWorkspaceRootFromElement(node);
-      if (workspaceRoot) return workspaceRoot;
-    }
-    return "";
-  }
-
-  function zedRemoteActiveThreadRow() {
-    const rows = sessionRows(true).filter((row) => row instanceof HTMLElement);
-    return rows.find((row) => row.getAttribute("data-app-action-sidebar-thread-active") === "true")
-      || rows.find((row) => row.getAttribute("aria-current") === "page" || row.getAttribute("aria-current") === "true")
-      || null;
-  }
-
-  function zedRemoteCurrentFallbackPayload() {
-    const row = zedRemoteActiveThreadRow();
-    const ref = row ? sessionRefFromRow(row) : currentSessionRef();
-    const threadId = ref.session_id || locationThreadId();
-    const hostId = zedRemoteString(row?.getAttribute?.("data-app-action-sidebar-thread-host-id"));
-    const isRemoteHost = zedRemoteIsRemoteHostId(hostId);
-    const payload = {};
-    if (threadId) payload.threadId = threadId;
-    if (hostId && hostId !== "local") payload.hostId = hostId;
-    if (!isRemoteHost) return payload;
-    const remoteWorkspaceRoot = zedRemoteWorkspaceRootFromRow(row);
-    const remoteProjectId = zedRemoteProjectIdFromRow(row);
-    if (remoteWorkspaceRoot) payload.remoteWorkspaceRoot = remoteWorkspaceRoot;
-    if (remoteProjectId) payload.remoteProjectId = remoteProjectId;
-    return payload;
-  }
-
-  async function resolveZedRemoteFallbackRequest() {
-    const payload = zedRemoteCurrentFallbackPayload();
-    if (!zedRemoteIsRemoteHostId(payload.hostId)) return null;
-    const result = await postJson("/zed-remote/fallback-request", payload);
-    return result?.status === "ok" && result.request ? result.request : null;
-  }
-
-  function zedRemoteOpenStrategy() {
-    const strategy = zedRemoteString(codexPlusBackendSettings.zedRemoteOpenStrategy);
-    return ["addToFocusedWorkspace", "reuseWindow", "newWindow", "default"].includes(strategy)
-      ? strategy
-      : "addToFocusedWorkspace";
-  }
-
-  function zedRemoteString(value) {
-    return typeof value === "string" || typeof value === "number" ? String(value).trim() : "";
-  }
-
-  function zedRemoteTruthy(value) {
-    if (value === true) return true;
-    if (typeof value === "string") return /^(true|1|yes|enabled|ssh)$/i.test(value.trim());
-    return false;
-  }
-
-  function zedRemoteHasTrustedSshSignal(source, hostConfig) {
-    return zedRemoteTruthy(source?.supportsSsh) || zedRemoteTruthy(hostConfig?.supportsSsh);
-  }
-
-  function zedRemoteContextFromObject(source) {
-    if (!source || typeof source !== "object") return null;
-    const hostConfig = source.hostConfig || source.sshHostConfig || source.remoteHostConfig || source.ssh || {};
-    const host = zedRemoteString(source.remoteHost || source.sshHost || source.host || source.hostname || source.hostName || hostConfig.host || hostConfig.hostname || hostConfig.hostName || hostConfig.sshHost);
-    const hostId = zedRemoteString(source.hostId);
-    const cwd = zedRemoteString(source.cwd || source.workspaceRoot || source.rootPath || source.remoteWorkspaceRoot || hostConfig.remoteWorkspaceRoot || hostConfig.workspaceRoot || hostConfig.rootPath);
-    if ((!host || !zedRemoteHasTrustedSshSignal(source, hostConfig)) && !(hostId.startsWith("remote-ssh-") && cwd.startsWith("/"))) return null;
-    const user = zedRemoteString(source.remoteUser || source.sshUser || source.user || source.username || hostConfig.user || hostConfig.username || hostConfig.sshUser);
-    const port = zedRemoteString(source.remotePort || source.sshPort || source.port || hostConfig.port || hostConfig.sshPort);
-    const workspaceRoot = cwd;
-    return { hostId, ssh: { user, host, port }, workspaceRoot };
-  }
-
-  function zedRemoteWalkObject(root, visitor, options = {}) {
-    const maxDepth = options.maxDepth || 6;
-    const maxNodes = options.maxNodes || 180;
-    const visited = new WeakSet();
-    const stack = [{ value: root, depth: 0 }];
-    let scanned = 0;
-    while (stack.length && scanned < maxNodes) {
-      const { value, depth } = stack.pop();
-      if (!value || typeof value !== "object" || visited.has(value) || depth > maxDepth) continue;
-      visited.add(value);
-      scanned += 1;
-      const result = visitor(value);
-      if (result) return result;
-      if (value instanceof Element || value === window || value === document || value === document.body || value === document.documentElement) continue;
-      for (const key of Object.keys(value).slice(0, 80)) {
-        if (key === "ownerDocument" || key === "parentElement" || key === "parentNode" || key === "children" || key === "childNodes") continue;
-        let child;
-        try {
-          child = value[key];
-        } catch {
-          continue;
-        }
-        if (child && typeof child === "object") stack.push({ value: child, depth: depth + 1 });
-      }
-    }
-    return null;
-  }
-
-  function zedRemoteReactKeys(element) {
-    return Object.keys(element).filter((key) => key.startsWith("__reactFiber") || key.startsWith("__reactInternalInstance") || key.startsWith("__reactProps"));
-  }
-
-  function zedRemoteContextFromElement(element) {
-    for (const key of zedRemoteReactKeys(element)) {
-      const context = zedRemoteWalkObject(element[key], zedRemoteContextFromObject);
-      if (context) return context;
-    }
-    return null;
-  }
-
-  function zedRemoteContextForElement(element) {
-    for (let node = element; node && node !== document.body; node = node.parentElement) {
-      const context = zedRemoteContextFromElement(node);
-      if (context) return context;
-    }
-    return null;
-  }
-
-  function zedRemoteHostIdFromText(text) {
-    const source = String(text || "");
-    const match = source.match(/\bremote-ssh-[A-Za-z0-9:_-]+\b/);
-    return match ? match[0] : "";
-  }
-
-  function zedRemoteWorkspaceRootForPath(path) {
-    const source = String(path || "").trim();
-    const projects = Array.from(document.querySelectorAll(selectors.sidebarThread))
-      .map((row) => ({
-        label: (row.textContent || "").replace(/\s+/g, " ").trim(),
-        selected: row.getAttribute("aria-current") === "page" || row.getAttribute("data-selected") === "true" || row.getAttribute("data-active") === "true" || row.className.includes("selected"),
-      }))
-      .filter((row) => row.label);
-    const selected = projects.find((row) => row.selected)?.label || "";
-    for (const label of [selected, ...projects.map((row) => row.label)]) {
-      const name = label.match(/^([A-Za-z0-9._-]+)/)?.[1];
-      if (name && source.includes(`/repo/${name}/`)) return source.slice(0, source.indexOf(`/repo/${name}/`) + `/repo/${name}`.length);
-    }
-    const repoIndex = source.indexOf("/bin/repo/");
-    if (repoIndex >= 0) {
-      const afterRepo = source.slice(repoIndex + "/bin/repo/".length);
-      const project = afterRepo.split("/")[0];
-      if (project) return source.slice(0, repoIndex + "/bin/repo/".length + project.length);
-    }
-    return source;
-  }
-
-  function zedRemoteFallbackContextForElement(element) {
-    const pathText = (element.textContent || "").trim();
-    if (!pathText.startsWith("/")) return null;
-    const root = element.closest("main") || document.body;
-    const hostId = zedRemoteHostIdFromText(root?.textContent || "") || "remote-ssh-codex-managed:remote";
-    return { hostId, ssh: { user: "", host: "", port: "" }, workspaceRoot: zedRemoteWorkspaceRootForPath(pathText) };
-  }
-
-  function zedRemoteContextFromSerializedState(text) {
-    const source = String(text || "");
-    if (!source.includes("hostConfig") || !source.includes("supportsSsh") || !source.includes("remoteWorkspaceRoot")) return null;
-    const trimmed = source.trim();
-    if (/^[{[]/.test(trimmed)) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        const context = zedRemoteWalkObject(parsed, zedRemoteContextFromObject, { maxDepth: 10, maxNodes: 300 });
-        if (context) return context;
-      } catch {
-      }
-    }
-    if (!/['"]supportsSsh['"]\s*:\s*true/.test(source)) return null;
-    const fieldValue = (name) => {
-      const match = source.match(new RegExp(`["']${name}["']\\s*:\\s*["']([^"']+)["']`));
-      return match ? match[1] : "";
-    };
-    const host = fieldValue("host") || fieldValue("hostname") || fieldValue("hostName") || fieldValue("sshHost") || fieldValue("remoteHost");
-    if (!host) return null;
-    return {
-      ssh: {
-        user: fieldValue("user") || fieldValue("username") || fieldValue("sshUser") || fieldValue("remoteUser"),
-        host,
-        port: fieldValue("port") || fieldValue("sshPort") || fieldValue("remotePort"),
-      },
-      workspaceRoot: fieldValue("remoteWorkspaceRoot") || fieldValue("workspaceRoot") || fieldValue("rootPath"),
-    };
-  }
-
-  const zedRemoteContextCacheTtlMs = 1200;
-  let zedRemoteContextCache = { scope: null, at: 0, value: null };
-
-  function zedRemoteScopedElements(scope, selector) {
-    const root = scope?.querySelectorAll ? scope : document;
-    const nodes = [];
-    if (scope instanceof HTMLElement && scope.matches?.(selector)) nodes.push(scope);
-    root.querySelectorAll?.(selector).forEach((node) => nodes.push(node));
-    return Array.from(new Set(nodes));
-  }
-
-  function zedRemoteContextFromDataset(node) {
-    if (!(node instanceof HTMLElement)) return null;
-    const data = node.dataset;
-    return zedRemoteContextFromObject({
-      hostConfig: data.hostConfig ? { host: data.hostConfig, supportsSsh: true } : {},
-      supportsSsh: data.supportsSsh || data.supportsSshRemote,
-      sshHost: data.sshHost,
-      remoteHost: data.remoteHost,
-      host: data.host,
-      sshUser: data.sshUser,
-      remoteUser: data.remoteUser,
-      user: data.user,
-      sshPort: data.sshPort,
-      remotePort: data.remotePort,
-      port: data.port,
-      remoteWorkspaceRoot: data.remoteWorkspaceRoot,
-      workspaceRoot: data.workspaceRoot,
-    });
-  }
-
-  function zedRemoteContextUncached(scope = document) {
-    const explicitSelector = "[data-host-config], [data-ssh-host], [data-remote-host], [data-remote-workspace-root], [data-supports-ssh]";
-    for (const node of zedRemoteScopedElements(scope, explicitSelector)) {
-      if (isExtensionUiNode(node)) continue;
-      const context = zedRemoteContextFromDataset(node);
-      if (context) return context;
-    }
-    const reactSelector = "[data-remote-path], [data-file-path], [data-path], [data-open-in-targets], [data-open-file], [data-codex-open-file], [role='menuitem']";
-    const reactNodes = zedRemoteScopedElements(scope, reactSelector);
-    if (scope instanceof HTMLElement && !isExtensionUiNode(scope)) reactNodes.unshift(scope);
-    for (const node of Array.from(new Set(reactNodes)).slice(0, 60)) {
-      if (!(node instanceof HTMLElement) || isExtensionUiNode(node)) continue;
-      const context = zedRemoteContextFromElement(node);
-      if (context) return context;
-    }
-    if (scope !== document) return null;
-    const scripts = Array.from(document.querySelectorAll("script[type='application/json'], script[data-state], script#__NEXT_DATA__, script:not([src])"));
-    for (const script of scripts.slice(0, 20)) {
-      const context = zedRemoteContextFromSerializedState(script.textContent || "");
-      if (context) return context;
-    }
-    return null;
-  }
-
-  function zedRemoteContext(scope = document) {
-    const settings = codexPlusSettings();
-    if (!settings.zedRemoteOpen) return null;
-    const now = Date.now();
-    if (zedRemoteContextCache.scope === scope && now - zedRemoteContextCache.at < zedRemoteContextCacheTtlMs) {
-      return zedRemoteContextCache.value;
-    }
-    const value = zedRemoteContextUncached(scope);
-    zedRemoteContextCache = { scope, at: now, value };
-    return value;
-  }
-
-  function zedRemoteAbsolutePath(value, workspaceRoot) {
-    const text = String(value || "").trim();
-    if (!text) return "";
-    if (text.startsWith("/")) return text;
-    if (workspaceRoot && !text.includes("://") && !text.startsWith("~")) {
-      return `${workspaceRoot.replace(/\/+$/, "")}/${text.replace(/^\.\//, "")}`;
-    }
-    return "";
-  }
-
-  function zedRemoteMetadataRemotePath(source) {
-    if (!source || typeof source !== "object") return "";
-    return zedRemoteString(source.remotePath || source.remote_path || source.path || source.filePath || source.file_path || source.openFile?.remotePath || source.openFile?.path);
-  }
-
-  function zedRemotePathFromElementMetadata(element) {
-    const dataPath = element.dataset.remotePath || element.dataset.filePath || element.dataset.path || "";
-    if (dataPath) return dataPath;
-    for (const key of zedRemoteReactKeys(element)) {
-      const path = zedRemoteWalkObject(element[key], zedRemoteMetadataRemotePath, { maxDepth: 6, maxNodes: 120 });
-      if (path) return path;
-    }
-    return "";
-  }
-
-  function zedRemoteInlinePathFromElement(element, context) {
-    if (!context?.hostId && !context?.ssh?.host) return "";
-    const text = (element.textContent || "").trim();
-    if (!text || text.length > 600 || !text.startsWith("/")) return "";
-    const path = zedRemoteAbsolutePath(text, context.workspaceRoot || "");
-    if (!path) return "";
-    if (context.workspaceRoot && !path.startsWith(`${context.workspaceRoot.replace(/\/+$/, "")}/`) && path !== context.workspaceRoot) return "";
-    return path;
-  }
-
-  function zedRemoteAnchorHasOpenFileMetadata(anchor) {
-    if (!(anchor instanceof HTMLAnchorElement)) return false;
-    if (anchor.dataset.remotePath || anchor.dataset.filePath || anchor.dataset.path || anchor.dataset.openInTargets || anchor.dataset.openFile || anchor.dataset.codexOpenFile) return true;
-    const label = `${anchor.getAttribute("aria-label") || ""} ${anchor.getAttribute("data-testid") || ""} ${anchor.getAttribute("rel") || ""}`;
-    return /open[-_\s]?file|open-in-targets|remote/i.test(label) && !!zedRemotePathFromElementMetadata(anchor);
-  }
-
-  function zedRemoteFileCandidates(context, scope = document) {
-    const candidates = [];
-    const seen = new Set();
-    const addCandidate = (node, candidateContext, rawPath) => {
-      if (!candidateContext?.ssh?.host && !candidateContext?.hostId) return;
-      const path = zedRemoteAbsolutePath(rawPath, candidateContext.workspaceRoot || "");
-      if (!path || seen.has(path)) return;
-      seen.add(path);
-      candidates.push({ node, request: { ssh: candidateContext.ssh, hostId: candidateContext.hostId || "", path } });
-    };
-    const selectors = "[data-remote-path], [data-file-path], [data-path], [data-open-in-targets], [data-open-file], [data-codex-open-file], a[data-remote-path], a[data-file-path], a[data-path]";
-    zedRemoteScopedElements(scope, selectors).forEach((node) => {
-      if (!(node instanceof HTMLElement) || isExtensionUiNode(node)) return;
-      if (node instanceof HTMLAnchorElement && !zedRemoteAnchorHasOpenFileMetadata(node)) return;
-      addCandidate(node, zedRemoteContextForElement(node) || context, zedRemotePathFromElementMetadata(node));
-    });
-    if (scope !== document) {
-      zedRemoteScopedElements(scope, "span.inline-markdown, code, [class*='inlineMarkdown']").forEach((node) => {
-        if (!(node instanceof HTMLElement) || isExtensionUiNode(node)) return;
-        const candidateContext = zedRemoteContextForElement(node) || context || zedRemoteFallbackContextForElement(node);
-        if (!candidateContext?.hostId && !candidateContext?.ssh?.host) return;
-        const path = zedRemoteInlinePathFromElement(node, candidateContext);
-        if (path) addCandidate(node, candidateContext, path);
-      });
-    }
-    return candidates;
-  }
-
-  function zedRemoteBestOpenRequest(scope = document, context = zedRemoteContext(scope) || zedRemoteContext(document) || {}) {
-    const candidates = zedRemoteFileCandidates(context, scope);
-    if (candidates.length) return candidates[0].request;
-    return null;
-  }
-
-  async function openZedRemote(request) {
-    let nextRequest = request;
-    if (!nextRequest?.ssh?.host && nextRequest?.hostId) {
-      const ssh = await resolveZedRemoteHost(nextRequest.hostId);
-      nextRequest = ssh ? { ...nextRequest, ssh } : nextRequest;
-    }
-    if (!nextRequest?.ssh?.host) {
-      showZedRemoteToast(zedRemoteMissingHostMessage);
-      return;
-    }
-    nextRequest = {
-      ...nextRequest,
-      strategy: nextRequest.strategy || zedRemoteOpenStrategy(),
-      remember: codexPlusBackendSettings.zedRemoteProjectRegistryEnabled !== false,
-    };
-    try {
-      const result = await postJson("/zed-remote/open", nextRequest);
-      if (result?.status === "ok") {
-        showZedRemoteToast("Opened in Zed Remote");
-        return;
-      }
-      showZedRemoteToast(result?.message || "Cannot open this file in Zed Remote");
-    } catch (error) {
-      showZedRemoteToast(error?.message || "Cannot open this file in Zed Remote");
-    }
-  }
-
-  function removeZedRemoteButtons() {
-    document.querySelectorAll(`[data-codex-zed-remote-version]`).forEach((node) => {
-      delete node.dataset.codexZedRemoteVersion;
-    });
-    document.querySelectorAll(`.${zedRemoteButtonClass}`).forEach((node) => node.remove());
-  }
-
-  function createZedRemoteOpenInMenuItem(referenceItem) {
-    const item = document.createElement("div");
-    item.className = referenceItem?.className || "no-drag text-token-foreground outline-hidden rounded-lg px-[var(--padding-row-x)] py-[var(--padding-row-y)] text-sm group hover:bg-token-list-hover-background focus:bg-token-list-hover-background cursor-interaction flex flex-col";
-    item.classList.add(zedRemoteOpenInMenuItemClass);
-    item.setAttribute("role", referenceItem?.getAttribute("role") || "menuitem");
-    item.setAttribute("tabindex", referenceItem?.getAttribute("tabindex") || "-1");
-    item.setAttribute("data-orientation", referenceItem?.getAttribute("data-orientation") || "vertical");
-    item.innerHTML = `
-      <div class="flex w-full items-center gap-1.5">
-        <span class="inline-flex size-[18px] items-center justify-center leading-none shrink-0 opacity-75 group-focus:opacity-100 group-hover:opacity-100">
-          <img alt="" class="codex-zed-open-in-menu-icon icon-sm" src="apps/zed.png">
-        </span>
-        <span class="flex-1 min-w-0 truncate">Zed</span>
-      </div>
-    `;
-    bindZedRemoteOpenInMenuItem(item, "injected");
-    return item;
-  }
-
-  function zedRemoteOpenInMenuActivationIsDuplicate(target) {
-    if (!(target instanceof HTMLElement)) return false;
-    const now = Date.now();
-    const activatedAt = Number(target.dataset.codexZedOpenInMenuActivatedAt || 0);
-    if (activatedAt && now - activatedAt < zedRemoteOpenInMenuActivationWindowMs) return true;
-    target.dataset.codexZedOpenInMenuActivatedAt = String(now);
-    return false;
-  }
-
-  async function activateZedRemoteOpenInMenuItem(event) {
-    if (!codexPlusSettings().zedRemoteOpen) return;
-    if (event?.type === "keydown" && !["Enter", " "].includes(event.key)) return;
-    const scope = event?.currentTarget?.closest?.('[role="menu"], [data-radix-popper-content-wrapper]') || event?.currentTarget || document;
-    event.preventDefault();
-    event.stopPropagation();
-    event.stopImmediatePropagation?.();
-    if (zedRemoteOpenInMenuActivationIsDuplicate(event?.currentTarget)) return;
-    const request = zedRemoteBestOpenRequest(scope) || await resolveZedRemoteFallbackRequest();
-    if (!request) {
-      showZedRemoteToast("Cannot find a remote workspace or file for Zed");
-      return;
-    }
-    openZedRemote(request);
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
-  }
-
-  function bindZedRemoteOpenInMenuItem(item, source) {
-    item.setAttribute("data-codex-zed-open-in-menu", source);
-    if (item.dataset.codexZedOpenInMenuBound === zedRemoteOpenInMenuVersion) return;
-    item.dataset.codexZedOpenInMenuBound = zedRemoteOpenInMenuVersion;
-    item.dataset.codexZedOpenInMenuVersion = zedRemoteOpenInMenuVersion;
-    item.addEventListener("pointerup", activateZedRemoteOpenInMenuItem, true);
-    item.addEventListener("click", activateZedRemoteOpenInMenuItem, true);
-    item.addEventListener("keydown", activateZedRemoteOpenInMenuItem, true);
-  }
-
-  function removeZedRemoteOpenInMenuItems(scope = document) {
-    const root = scope?.querySelectorAll ? scope : document;
-    root.querySelectorAll(`.${zedRemoteOpenInMenuItemClass}, [data-codex-zed-open-in-menu="injected"]`).forEach((node) => node.remove());
-  }
-
-  function zedRemoteOpenInMenuScopes(scope = document) {
-    const root = scope?.querySelectorAll ? scope : document;
-    const menus = [];
-    if (scope instanceof HTMLElement && scope.matches?.('[role="menu"]')) menus.push(scope);
-    root.querySelectorAll?.('[role="menu"]').forEach((menu) => menus.push(menu));
-    return Array.from(new Set(menus));
-  }
-
-  function refreshZedRemoteOpenInMenus(scope = document) {
-    removeZedRemoteOpenInMenuItems(scope);
-    if (!codexPlusSettings().zedRemoteOpen) return;
-    const fallbackPayload = zedRemoteCurrentFallbackPayload();
-    zedRemoteOpenInMenuScopes(scope).forEach((menu) => {
-      if (!(menu instanceof HTMLElement) || isExtensionUiNode(menu)) return;
-      const items = Array.from(menu.querySelectorAll('[role="menuitem"]')).filter((item) => !isExtensionUiNode(item));
-      const menuText = items.map((item) => (item.textContent || "").trim()).join(" ");
-      if (!/\b(VS Code|Cursor|Antigravity)\b/.test(menuText)) return;
-      if (!zedRemoteBestOpenRequest(menu) && !zedRemoteIsRemoteHostId(fallbackPayload.hostId)) return;
-      const existingZedItem = items.find((item) => (item.textContent || "").trim() === "Zed");
-      if (existingZedItem) {
-        bindZedRemoteOpenInMenuItem(existingZedItem, "native");
-        return;
-      }
-      const referenceItem = items.find((item) => /^(VS Code|Cursor|Antigravity)$/.test((item.textContent || "").trim()));
-      if (!referenceItem) return;
-      referenceItem.parentElement?.appendChild(createZedRemoteOpenInMenuItem(referenceItem));
-    });
-  }
-
-  function sessionCopyMenuRow(menu) {
-    const triggerId = menu?.getAttribute?.("aria-labelledby") || "";
-    const trigger = triggerId ? document.getElementById(triggerId) : null;
-    const labeledTrigger = trigger && /^(聊天操作|Chat actions)$/i.test(trigger.getAttribute("aria-label") || "")
-      ? trigger
-      : null;
-    const fallbackTrigger = lastSessionActionTrigger?.isConnected
-      ? lastSessionActionTrigger
-      : document.querySelector('button[aria-label="聊天操作"], button[aria-label="Chat actions"]');
-    const row = (labeledTrigger || fallbackTrigger)?.closest?.(selectors.sidebarThread)
-      || [...document.querySelectorAll(selectors.sidebarThread)]
-        .find((candidate) => candidate.getAttribute("data-app-action-sidebar-thread-selected") === "true");
-    const ref = row ? sessionRefFromRow(row) : null;
-    if (!row || !ref?.session_id || isClientNewThreadId(ref.session_id)) return null;
-    return row;
-  }
-
-  function looksLikeSessionActionMenu(menu) {
-    if (!(menu instanceof HTMLElement) || menu.hidden) return false;
-    if (menu.matches(`.${moreMenuClass}, .${codexPlusMenuFloatingClass}, #${codexPlusMenuId}`)) return false;
-    const text = normalizedElementText(menu);
-    const hasRename = /(?:重命名|rename)/i.test(text);
-    const hasOtherSessionAction = /(?:置顶|取消置顶|pin|unpin|归档|archive|删除|delete|移动|move)/i.test(text);
-    return hasRename || hasOtherSessionAction;
-  }
-
-  function rememberSessionActionTrigger(event) {
-    const trigger = event.target?.closest?.('button[aria-label="聊天操作"], button[aria-label="Chat actions"]');
-    if (trigger) lastSessionActionTrigger = trigger;
-  }
-
-  function sessionCopyMenuScopes(scope = document) {
-    const root = scope?.querySelectorAll ? scope : document;
-    const menus = [];
-    if (scope instanceof HTMLElement && scope.matches?.('[role="menu"]')) menus.push(scope);
-    root.querySelectorAll?.('[role="menu"]').forEach((menu) => menus.push(menu));
-    return Array.from(new Set(menus));
-  }
-
-  function sessionCopyMenuItemIcon() {
-    return '<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"></path></svg>';
-  }
-
-  function sessionCopyMenuActivationIsDuplicate(target) {
-    if (!(target instanceof HTMLElement)) return false;
-    const now = Date.now();
-    const activatedAt = Number(target.dataset.codexSessionCopyActivatedAt || 0);
-    if (activatedAt && now - activatedAt < 600) return true;
-    target.dataset.codexSessionCopyActivatedAt = String(now);
-    return false;
-  }
-
-  async function selectSessionRowForAction(row) {
-    if (!(row instanceof HTMLElement) || !row.isConnected) return false;
-    const targetId = row.getAttribute("data-app-action-sidebar-thread-id") || "";
-    if (!targetId) return false;
-    if (row.getAttribute("data-app-action-sidebar-thread-selected") !== "true") row.click();
-
-    const deadline = Date.now() + sessionCopyMenuActivationTimeoutMs;
-    while (Date.now() < deadline) {
-      const selected = [...document.querySelectorAll(selectors.sidebarThread)]
-        .find((candidate) => candidate.getAttribute("data-app-action-sidebar-thread-selected") === "true");
-      if (selected?.getAttribute("data-app-action-sidebar-thread-id") === targetId) return true;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    return false;
-  }
-
-  function dispatchNativePointerClick(node) {
-    if (!(node instanceof HTMLElement)) return;
-    node.focus?.();
-    if (typeof PointerEvent === "function") {
-      node.dispatchEvent(new PointerEvent("pointerdown", {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        button: 0,
-        buttons: 1,
-        pointerId: 1,
-        pointerType: "mouse",
-        isPrimary: true,
-      }));
-      node.dispatchEvent(new PointerEvent("pointerup", {
-        bubbles: true,
-        cancelable: true,
-        composed: true,
-        button: 0,
-        buttons: 0,
-        pointerId: 1,
-        pointerType: "mouse",
-        isPrimary: true,
-      }));
-    }
-    node.click();
-  }
-
-  async function waitForSessionElement(resolveElement, timeoutMs) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const element = resolveElement();
-      if (element) return element;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    return null;
-  }
-
-  function visibleSessionRenameDialog() {
-    return [...document.querySelectorAll('[role="dialog"]')]
-      .filter(visibleElement)
-      .find((dialog) => dialog.querySelector('input[aria-label="聊天标题"], input[aria-label="Chat title"]')) || null;
-  }
-
-  function closeSessionRenameDialog(dialog) {
-    const cancelButton = [...dialog?.querySelectorAll?.("button") || []]
-      .find((button) => /^(取消|Cancel)$/i.test(normalizedElementText(button)));
-    if (cancelButton) {
-      cancelButton.click();
-      return;
-    }
-    document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
-  }
-
-  function sessionActionTrigger(row) {
-    const direct = row?.querySelector?.('button[aria-label="聊天操作"], button[aria-label="Chat actions"]');
-    if (direct instanceof HTMLElement && visibleElement(direct)) return direct;
-    if (lastSessionActionTrigger instanceof HTMLElement && lastSessionActionTrigger.isConnected && visibleElement(lastSessionActionTrigger)) {
-      return lastSessionActionTrigger;
-    }
-    const candidates = Array.from(document.querySelectorAll([
-      'button[aria-label="聊天操作"]',
-      'button[aria-label="Chat actions"]',
-      'button[aria-label="会话操作"]',
-      'button[aria-label="Thread actions"]',
-      'button[aria-label="更多"]',
-      'button[aria-label="More"]',
-      'button[aria-label="More options"]',
-      'button[aria-label="更多操作"]',
-      'button[aria-label="More actions"]',
-      'button[aria-label="会话选项"]',
-      'button[aria-label="Conversation options"]',
-      'button[aria-label="Thread options"]',
-      'button[aria-haspopup="menu"]',
-    ].join(","))).filter((button) => {
-      if (!(button instanceof HTMLElement) || !visibleElement(button) || isExtensionUiNode(button)) return false;
-      const header = button.closest?.(selectors.appHeader);
-      return !!header || /聊天操作|Chat actions|会话操作|Thread actions|更多|More|选项|options/i.test(button.getAttribute("aria-label") || "");
-    });
-    if (candidates.length) return candidates.at(-1);
-    const header = document.querySelector(selectors.appHeader);
-    const iconButtons = Array.from(header?.querySelectorAll?.("button") || [])
-      .filter((button) => button instanceof HTMLElement && visibleElement(button) && !isExtensionUiNode(button))
-      .filter((button) => {
-        const text = normalizedElementText(button);
-        return text === "..." || text === "⋯" || text === "···" || button.getAttribute("aria-expanded") != null;
-      });
-    return iconButtons.at(-1) || null;
-  }
-
-  async function activateSessionAutoRenameMenuItem(event) {
-    if (event?.type === "keydown" && !["Enter", " "].includes(event.key)) return;
-    const item = event?.currentTarget;
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    event?.stopImmediatePropagation?.();
-    if (sessionCopyMenuActivationIsDuplicate(item)) return;
-    closeSessionMoreMenus();
-
-    const row = item?.__codexSessionAutoRenameRow;
-    if (!(row instanceof HTMLElement) || !row.isConnected) {
-      showToast("找不到要重命名的会话", null);
-      return;
-    }
-    if (!await selectSessionRowForAction(row)) {
-      showToast("会话加载超时，请稍后重试", null);
-      return;
-    }
-
-    const trigger = sessionActionTrigger(row);
-    if (!(trigger instanceof HTMLElement)) {
-      showToast("找不到 Codex 原生重命名入口", null);
-      return;
-    }
-    lastSessionActionTrigger = trigger;
-    dispatchNativePointerClick(trigger);
-
-    let renameItem = await waitForSessionElement(() => {
-      return sessionCopyMenuScopes()
-        .filter((menu) => visibleElement(menu) && looksLikeSessionActionMenu(menu))
-        .flatMap((menu) => [...menu.querySelectorAll('[role="menuitem"]')])
-        .find((candidate) => /^(重命名|Rename)$/i.test(normalizedElementText(candidate))) || null;
-    }, 1200);
-    if (!renameItem) {
-      trigger.click();
-      renameItem = await waitForSessionElement(() => {
-        return [...document.querySelectorAll('[role="menuitem"]')]
-          .filter(visibleElement)
-          .find((candidate) => /^(重命名|Rename)$/i.test(normalizedElementText(candidate))) || null;
-      }, 1200);
-    }
-    if (!(renameItem instanceof HTMLElement)) {
-      showToast("无法打开 Codex 原生重命名入口", null);
-      return;
-    }
-    renameItem.click();
-
-    const dialog = await waitForSessionElement(visibleSessionRenameDialog, 3000);
-    if (!(dialog instanceof HTMLElement)) {
-      showToast("无法打开 Codex 原生重命名窗口", null);
-      return;
-    }
-    const titleInput = dialog.querySelector('input[aria-label="聊天标题"], input[aria-label="Chat title"]');
-    const initialTitle = titleInput?.value || "";
-    showToast("正在使用 Codex 生成会话名称…", null);
-
-    const suggestionButton = await waitForSessionElement(() => {
-      const currentDialog = visibleSessionRenameDialog();
-      if (!currentDialog) return null;
-      return [...currentDialog.querySelectorAll("button")]
-        .filter(visibleElement)
-        .find((button) => {
-          const text = normalizedElementText(button);
-          return button.classList.contains("text-info")
-            && !!text
-            && text !== initialTitle
-            && !/^(取消|保存|Cancel|Save)$/i.test(text);
-        }) || null;
-    }, sessionAutoRenameTimeoutMs);
-    if (!(suggestionButton instanceof HTMLElement)) {
-      closeSessionRenameDialog(visibleSessionRenameDialog());
-      showToast("Codex 未能生成新名称，请稍后重试", null);
-      return;
-    }
-
-    suggestionButton.click();
-    const renamedInput = await waitForSessionElement(() => {
-      const input = visibleSessionRenameDialog()?.querySelector('input[aria-label="聊天标题"], input[aria-label="Chat title"]');
-      return input?.value?.trim() && input.value.trim() !== initialTitle.trim() ? input : null;
-    }, 1500);
-    const activeDialog = visibleSessionRenameDialog();
-    const saveButton = [...activeDialog?.querySelectorAll?.("button") || []]
-      .find((button) => /^(保存|Save)$/i.test(normalizedElementText(button)));
-    if (!renamedInput || !(saveButton instanceof HTMLElement) || saveButton.disabled) {
-      closeSessionRenameDialog(activeDialog);
-      showToast("Codex 未能应用新名称，请稍后重试", null);
-      return;
-    }
-    saveButton.click();
-    showToast("已自动重命名当前会话", null);
-  }
-
-  async function activateSessionCopyMenuItem(event) {
-    if (event?.type === "keydown" && !["Enter", " "].includes(event.key)) return;
-    const item = event?.currentTarget;
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    event?.stopImmediatePropagation?.();
-    if (sessionCopyMenuActivationIsDuplicate(item)) return;
-    const row = item?.__codexSessionCopyRow;
-    if (!(row instanceof HTMLElement) || !row.isConnected) {
-      showToast("找不到要复制的会话", null);
-      return;
-    }
-    if (!await selectSessionRowForAction(row)) {
-      showToast("会话加载超时，请稍后重试", null);
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 350));
-    const forkButtons = [...document.querySelectorAll('button[aria-label="从这里创建聊天分支"], button[aria-label="Fork from here"]')]
-      .filter(visibleElement)
-      .filter((button) => !isExtensionUiNode(button));
-    const forkButton = forkButtons.at(-1);
-    if (!forkButton) {
-      showToast("当前会话没有可用的官方分支入口", null);
-      return;
-    }
-    forkButton.click();
-  }
-
-  function createSessionCopyMenuItem(referenceItem, row) {
-    const item = document.createElement("div");
-    item.className = referenceItem?.className || "no-drag outline-hidden rounded-lg px-[var(--padding-row-x)] py-[var(--padding-row-y)] text-sm text-default group cursor-interaction flex flex-col";
-    item.classList.add(sessionCopyMenuItemClass);
-    item.setAttribute("role", referenceItem?.getAttribute("role") || "menuitem");
-    item.setAttribute("tabindex", referenceItem?.getAttribute("tabindex") || "-1");
-    item.setAttribute("data-orientation", referenceItem?.getAttribute("data-orientation") || "vertical");
-    item.setAttribute("data-codex-session-copy-menu", "true");
-    item.dataset.codexSessionCopyVersion = sessionCopyMenuItemVersion;
-    item.__codexSessionCopyRow = row;
-    item.innerHTML = `<div class="flex w-full items-center gap-1.5"><span class="inline-flex h-5 w-5 shrink-0 items-center justify-center opacity-75 group-focus:opacity-100 group-hover:opacity-100">${sessionCopyMenuItemIcon()}</span><span class="flex-1 min-w-0 truncate">原地复制会话 - Codex++</span></div>`;
-    item.addEventListener("pointerup", activateSessionCopyMenuItem, true);
-    item.addEventListener("click", activateSessionCopyMenuItem, true);
-    item.addEventListener("keydown", activateSessionCopyMenuItem, true);
-    return item;
-  }
-
-  function refreshSessionCopyMenuItems(scope = document) {
-    sessionCopyMenuScopes(scope).forEach((menu) => {
-      if (!(menu instanceof HTMLElement) || isExtensionUiNode(menu)) return;
-      if (menu.matches(`.${moreMenuClass}, .${codexPlusMenuFloatingClass}, #${codexPlusMenuId}`)) {
-        menu.querySelectorAll(`.${sessionCopyMenuItemClass}`).forEach((item) => item.remove());
-        return;
-      }
-      const row = sessionCopyMenuRow(menu);
-      if (!looksLikeSessionActionMenu(menu)) return;
-      const existing = menu.querySelector(`.${sessionCopyMenuItemClass}`);
-      if (!row) {
-        existing?.remove();
-        return;
-      }
-      if (existing) {
-        existing.__codexSessionCopyRow = row;
-        return;
-      }
-      const referenceItem = menu.querySelector('[role="menuitem"]');
-      menu.appendChild(createSessionCopyMenuItem(referenceItem, row));
-    });
-  }
-
-  async function refreshZedRemoteOpenControls(scope = document) {
-    if (!codexPlusSettings().zedRemoteOpen) {
-      removeZedRemoteButtons();
-      removeZedRemoteOpenInMenuItems();
-      return;
-    }
-    try {
-      const status = await loadZedRemoteStatus();
-      if (!status?.platformSupported || (!status.zedAppFound && !status.zedCliFound)) {
-        removeZedRemoteButtons();
-        removeZedRemoteOpenInMenuItems();
-        return;
-      }
-    } catch (_) {
-      removeZedRemoteButtons();
-      removeZedRemoteOpenInMenuItems();
-      return;
-    }
-    refreshZedRemoteOpenInMenus(scope);
-  }
-
-  function runScheduledZedRemoteMenuRefresh() {
-    window.__codexZedRemoteMenuRefreshPending = false;
-    clearTimeout(window.__codexZedRemoteMenuRefreshTimer);
-    window.__codexZedRemoteMenuRefreshTimer = null;
-    refreshZedRemoteOpenControls().catch(() => {
-      removeZedRemoteOpenInMenuItems();
-    });
-  }
-
-  function shouldRefreshZedRemoteMenus(mutations) {
-    if (!codexPlusSettings().zedRemoteOpen) return false;
-    if (!mutations) return true;
-    return mutations.some((mutation) => {
-      const target = mutation.target;
-      if (isExtensionUiNode(target)) return false;
-      if (target?.nodeType === 1 && target.matches?.('[role="menu"], [data-radix-popper-content-wrapper]')) return true;
-      return [...Array.from(mutation.addedNodes), ...Array.from(mutation.removedNodes)].some((node) => node.nodeType === 1 && (
-        node.matches?.('[role="menu"], [data-radix-popper-content-wrapper]') ||
-        node.querySelector?.('[role="menu"], [data-radix-popper-content-wrapper]')
-      ));
-    });
-  }
-
-  function scheduleZedRemoteMenuRefresh(mutations) {
-    if (!shouldRefreshZedRemoteMenus(mutations)) return;
-    if (window.__codexZedRemoteMenuRefreshPending) return;
-    window.__codexZedRemoteMenuRefreshPending = true;
-    window.__codexZedRemoteMenuRefreshTimer = setTimeout(runScheduledZedRemoteMenuRefresh, 50);
-  }
-
-  function scanDeferred() {
-    if (pluginPatchDisabledInRelayMode()) {
-      clearPluginPatchArtifacts();
-    } else {
+  /** 插件市场解锁的补丁（内置拓展「插件市场解锁」登记成扫描步骤；补丁撤不掉，停用后刷新页面才完全恢复）。 */
+  function installCodexPluginMarketplacePatches() {
+    if (codexPluginMarketplacePatchEnabled()) {
       const pluginUnlockStrategy = codexPluginUnlockStrategy();
       const settings = codexPlusSettings();
       logCodexPluginUnlockStrategy(pluginUnlockStrategy);
@@ -1444,16 +619,48 @@
         }
       }
     }
-    refreshDreamSkin();
-    refreshThreadIdBadges();
+  }
+
+  function scanDeferred() {
+    // 内置拓展登记的扫描步骤（桌宠与大肥鱼、梦皮、侧聊保存……）：拓展卸下时步骤跟着撤掉，不再由扫描循环直接点名调用。
+    // 已删会话的行过滤（会话删除）、对话宽度、滚动位置恢复也都是内置拓展经公开的 ctx.onScan 登记的步骤。
+    runCodexPlusScanSteps();
+    // 会话行的操作按钮组、归档页的行按钮是删除、导出与第三方拓展 rowAction 共用的宿主，留在内核里扫描。
     sessionRows().forEach(tryAttachButton);
     updateDeleteButtonOffsets();
     archivedPageRows().forEach(attachArchivedPageDeleteButton);
-    refreshConversationView();
-    installCodexServiceTierBadge();
-    installSessionShareButton();
-    scheduleThreadScrollSync();
+    removeLegacyCodexServiceTierBadges();
     refreshCodexModelWhitelistFromScan(window.__codexSessionDeleteLastMutations);
+  }
+
+  /**
+   * 扫描步骤登记处：登记号 → { step, phase, owner }。拓展经公开的 ctx.onScan 登记（内置拓展也一样），卸下时撤销；
+   * owner 是登记它的拓展（scriptKey，如 builtin:dictation），runCodexPlusScanStep 按 owner 点名跑。
+   */
+  function codexPlusScanSteps() {
+    globalThis.__codexPlusScanSteps ??= new Map();
+    return globalThis.__codexPlusScanSteps;
+  }
+
+  /** phase：deferred（默认，跟着完整扫描）或 light（跟着轻量扫描）。返回撤销函数。 */
+  function registerCodexPlusScanStep(owner, step, phase = "deferred") {
+    const steps = codexPlusScanSteps();
+    globalThis.__codexPlusScanStepSeq = (globalThis.__codexPlusScanStepSeq || 0) + 1;
+    const id = `${owner}#${globalThis.__codexPlusScanStepSeq}`;
+    const entry = { step, phase: phase === "light" ? "light" : "deferred", owner: String(owner) };
+    steps.set(id, entry);
+    return () => {
+      if (steps.get(id) === entry) steps.delete(id);
+    };
+  }
+
+  function runCodexPlusScanSteps(phase = "deferred") {
+    for (const entry of [...codexPlusScanSteps().values()]) if (entry.phase === phase) runScanStep(entry.step);
+  }
+
+  /** 只跑某个拓展登记的步骤（它没装上时什么也不做）。 */
+  function runCodexPlusScanStep(owner) {
+    for (const entry of [...codexPlusScanSteps().values()]) if (entry.owner === owner) runScanStep(entry.step);
   }
 
   function runScanStep(step) {
@@ -1466,8 +673,12 @@
   }
 
   function scan() {
+    pruneSessionMoreMenus();
+    if (document.hidden) {
+      window.__codexSessionDeleteScanPending = true;
+      return;
+    }
     void installDictationSupportPatch();
     runScanStep(scanLightweight);
-    requestAnimationFrame(() => runScanStep(scanDeferred));
+    scheduleDeferredScan();
   }
-

@@ -1,7 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use crate::settings::{RelayProfile, SettingsStore};
+use anyhow::Context;
+
+use crate::settings::{BackendSettings, RelayProfile, SettingsStore};
 use serde_json::{Map, Value, json};
 
 const BASE_URL_ENV_KEYS: &[&str] = &[
@@ -27,6 +29,8 @@ struct ModelSource {
     api_key: String,
     /// 供应商自定义请求头（issue #1685）。非供应商来源为空。
     headers: Vec<crate::settings::RelayHeaderKeyValue>,
+    /// Anthropic Messages 协议：模型列表要 `x-api-key` + `anthropic-version`，且默认只返回 20 条。
+    anthropic: bool,
 }
 
 #[derive(Debug, Default)]
@@ -34,22 +38,30 @@ struct CodexConfig {
     root: HashMap<String, String>,
     profiles: HashMap<String, HashMap<String, String>>,
     model_providers: HashMap<String, HashMap<String, String>>,
+    effective_model: String,
 }
 
 pub async fn read_codex_model_catalog() -> Value {
     let home = codex_home_dir();
     let settings_path = crate::paths::default_settings_path();
+    let mut loaded_settings = None;
     if settings_path.exists() {
         if let Ok(settings) = SettingsStore::new(settings_path).load() {
             let profile = settings.active_relay_profile();
-            let catalog = relay_profile_model_catalog_value(&home, &profile);
+            let catalog = if let Some(aggregate) = crate::aggregate_catalog::active_model_aggregation(&settings) {
+                crate::aggregate_catalog::catalog_summary(&home, &settings, &aggregate)
+                    .unwrap_or_else(|_| relay_profile_model_catalog_value(&home, &profile))
+            } else {
+                relay_profile_model_catalog_value(&home, &profile)
+            };
             if catalog
                 .get("models")
                 .and_then(Value::as_array)
                 .map_or(false, |m| !m.is_empty())
             {
-                return catalog;
+                return model_catalog_with_prices(catalog, Some(&settings));
             }
+            loaded_settings = Some(settings);
         }
     }
     let env = std::env::vars_os()
@@ -67,6 +79,7 @@ pub async fn read_codex_model_catalog() -> Value {
                 "message": error.to_string(),
                 "service_tier": config_service_tier_value(&home),
                 "model": "",
+                "effective_config_model": "",
                 "model_provider": "",
                 "provider_name": "",
                 "default_model": "",
@@ -77,26 +90,142 @@ pub async fn read_codex_model_catalog() -> Value {
             });
         }
     };
-    read_codex_model_catalog_from_home(&home, &env, client).await
+    let catalog = read_codex_model_catalog_from_home(&home, &env, client).await;
+    model_catalog_with_prices(catalog, loaded_settings.as_ref())
+}
+
+/// 给目录里每个模型附上公开价格表的单价（`codex_plus_price`），前端模型选择器按它画价格条。
+/// 只读本地缓存的价格表，不阻塞路由；没有缓存时后台预热，本次不带价格。
+fn model_catalog_with_prices(mut catalog: Value, settings: Option<&BackendSettings>) -> Value {
+    apply_model_price_overlay(&mut catalog, settings);
+    catalog
+}
+
+fn apply_model_price_overlay(catalog: &mut Value, settings: Option<&BackendSettings>) {
+    let catalog_provider = catalog
+        .get("model_provider")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let Some(metadata) = catalog
+        .get_mut("modelMetadata")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    if metadata.is_empty() {
+        return;
+    }
+    let Some(prices) = crate::model_pricing::cached_catalog() else {
+        warm_price_catalog();
+        return;
+    };
+    overlay_prices(metadata, &prices, |group_id| {
+        group_base_url(settings, &catalog_provider, group_id)
+    });
+}
+
+/// 模型归属供应商的请求地址：聚合条目用成员的 base_url 查成员自己的价目，
+/// 其他（单供应商目录、官方目录）落到目录级 `model_provider` 对应的 profile。
+fn group_base_url(
+    settings: Option<&BackendSettings>,
+    catalog_provider: &str,
+    group_id: &str,
+) -> String {
+    let wanted = if group_id.trim().is_empty() {
+        catalog_provider.trim()
+    } else {
+        group_id.trim()
+    };
+    if wanted.is_empty() {
+        return String::new();
+    }
+    settings
+        .and_then(|settings| {
+            settings
+                .relay_profiles
+                .iter()
+                .find(|profile| profile.id == wanted)
+        })
+        .map(|profile| profile.base_url.trim().to_string())
+        .unwrap_or_default()
+}
+
+/// 条目对应的上游模型名：聚合成员的 slug 是 `cpx-<成员>/<上游>`，剥掉成员前缀；
+/// 默认成员的 slug 本来就是裸名，`[1M]` 这类窗口后缀交给查价的候选名处理。
+fn entry_upstream_model<'a>(slug: &'a str, group_id: &str) -> &'a str {
+    if group_id.trim().is_empty() {
+        return slug;
+    }
+    let prefix = crate::aggregate_catalog::aggregate_model_id(group_id, "");
+    slug.strip_prefix(&prefix).unwrap_or(slug)
+}
+
+fn overlay_prices(
+    metadata: &mut Map<String, Value>,
+    prices: &crate::model_pricing::PriceCatalog,
+    base_url_for: impl Fn(&str) -> String,
+) {
+    for (slug, entry) in metadata.iter_mut() {
+        let Some(entry) = entry.as_object_mut() else { continue };
+        let group_id = entry
+            .get("codex_plus_group_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let upstream = entry_upstream_model(slug, group_id);
+        let Some(found) = prices.lookup(&base_url_for(group_id), upstream) else {
+            continue;
+        };
+        entry.insert(
+            "codex_plus_price".to_string(),
+            json!({
+                "input": found.input,
+                "cachedInput": found.cached_input,
+                "output": found.output,
+                "currency": found.currency,
+                "provider": found.provider_name,
+                "source": "models.dev"
+            }),
+        );
+    }
+}
+
+/// 缓存缺失时后台拉一次价格表：本次响应不带价格，下次打开选择器就有了。
+fn warm_price_catalog() {
+    static WARMING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if WARMING.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
+    tokio::spawn(async move {
+        let _ = crate::model_pricing::load_catalog(false).await;
+        WARMING.store(false, std::sync::atomic::Ordering::SeqCst);
+    });
 }
 
 fn relay_profile_model_catalog_value(home: &Path, profile: &RelayProfile) -> Value {
     let models = relay_profile_model_ids(profile);
     let model = profile.model.trim().to_string();
+    let (live_config, _, _) = load_codex_config(&home.join("config.toml"));
     let codex_model_provider = codex_model_provider_for_relay_profile(home, profile);
-    let default_model = models.first().cloned().unwrap_or_default();
+    let configured_model = crate::relay_config::relay_profile_model(profile);
+    let default_model = if models.iter().any(|item| item == &configured_model) {
+        configured_model
+    } else {
+        models.first().cloned().unwrap_or_default()
+    };
     let provider_name = if profile.name.trim().is_empty() {
         profile.id.trim()
     } else {
         profile.name.trim()
     };
     let model_count = models.len();
-    let model_metadata = model_ui_metadata_map(&models);
+    let model_metadata = relay_profile_model_ui_metadata_map(profile, &models);
     json!({
         "status": if models.is_empty() { "not_configured" } else { "ok" },
         "path": home.join("config.toml").to_string_lossy(),
         "service_tier": config_service_tier_value(home),
         "model": model,
+        "effective_config_model": live_config.effective_model,
         "model_provider": profile.id.trim(),
         "codex_model_provider": codex_model_provider,
         "provider_name": provider_name,
@@ -116,6 +245,40 @@ fn relay_profile_model_catalog_value(home: &Path, profile: &RelayProfile) -> Val
         ],
         "responses_api": responses_api_status("unknown", "", "")
     })
+}
+
+/// 只报告实际配置中显式声明的模型，并考虑当前启用的 profile。
+pub(crate) fn effective_config_model(contents: &str) -> String {
+    let Ok(config) = contents.parse::<toml::Value>() else {
+        return String::new();
+    };
+    let Some(root) = config.as_table() else {
+        return String::new();
+    };
+    let profile = match root.get("profile") {
+        Some(profile) => {
+            let Some(profile) = profile.as_str() else {
+                return String::new();
+            };
+            let Some(profile) = root
+                .get("profiles")
+                .and_then(toml::Value::as_table)
+                .and_then(|profiles| profiles.get(profile))
+                .and_then(toml::Value::as_table)
+            else {
+                return String::new();
+            };
+            Some(profile)
+        }
+        None => None,
+    };
+    profile
+        .and_then(|profile| profile.get("model"))
+        .or_else(|| root.get("model"))
+        .and_then(toml::Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_string()
 }
 
 pub fn codex_model_provider_for_relay_profile(home: &Path, profile: &RelayProfile) -> String {
@@ -145,14 +308,151 @@ fn relay_profile_model_ids(profile: &RelayProfile) -> Vec<String> {
     )
 }
 
+/// 当前活动供应商在 Codex 模型列表里公布的模型 ID 集合，用于清理历史残留引用
+/// （例如换目录后模型选择器里还留着的 `ccs-xxx/model`）。
+///
+/// - 模型聚合：目录里的全部 `cpx-*`——目录由 Codex++ 生成，这份集合是权威的；
+///   成员未就绪导致目录算不出来时返回空集，调用方据此跳过清理，绝不误删。
+/// - 官方登录且没混用 API Key：模型列表由 Codex 自己决定，返回空集表示「不要清理」。
+/// - 普通 API 供应商：它的 model_list + 当前 model + 模型路由的源模型名，
+///   并同时收下剥掉 `[1M]` 这类窗口后缀的形式，宁可多留不可误删。
+pub fn active_published_model_ids(settings: &crate::settings::BackendSettings) -> HashSet<String> {
+    if let Some(aggregate) = crate::aggregate_catalog::active_model_aggregation(settings) {
+        // 配了默认供应商时，目录外的模型名仍有兜底转发，清「最近使用」会误删可用条目。
+        if crate::aggregate_catalog::default_backs_unbound_models(&aggregate) {
+            return HashSet::new();
+        }
+        return crate::aggregate_catalog::active_model_bindings(settings)
+            .map(|bindings| {
+                bindings
+                    .into_iter()
+                    .map(|binding| binding.catalog_model)
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
+    let profile = settings.active_relay_profile();
+    if profile.relay_mode == crate::settings::RelayMode::Official && !profile.official_mix_api_key {
+        return HashSet::new();
+    }
+    let mut ids = HashSet::new();
+    for model in relay_profile_model_ids(&profile) {
+        let (stripped, _) = crate::model_suffix::parse_model_suffix(&model);
+        if !stripped.is_empty() {
+            ids.insert(stripped);
+        }
+        ids.insert(model);
+    }
+    for route in &profile.model_routes {
+        let model = route.model.trim();
+        if !model.is_empty() {
+            ids.insert(model.to_string());
+        }
+    }
+    ids
+}
+
 fn model_ui_metadata_map(models: &[String]) -> Value {
+    model_ui_metadata_map_with_overrides(models, "")
+}
+
+fn model_ui_metadata_map_with_overrides(models: &[String], user_json: &str) -> Value {
+    let user: Value = serde_json::from_str(user_json).unwrap_or(Value::Null);
     let mut metadata = Map::new();
     for model in models {
-        if let Some(value) = crate::model_suffix::model_ui_metadata(model) {
+        let slug = crate::model_suffix::parse_model_suffix(model).0;
+        let user_override = user.as_object().and_then(|entries| entries.iter()
+            .find(|(key, value)| value.is_object() && crate::model_suffix::parse_model_suffix(key).0.eq_ignore_ascii_case(&slug))
+            .map(|(_, value)| value));
+        if let Some(value) = crate::model_suffix::model_ui_metadata_with_override(model, user_override) {
             metadata.insert(model.clone(), value);
         }
     }
     Value::Object(metadata)
+}
+
+fn relay_profile_model_ui_metadata_map(profile: &RelayProfile, models: &[String]) -> Value {
+    let mut metadata = model_ui_metadata_map_with_overrides(models, &profile.model_metadata)
+        .as_object().cloned().unwrap_or_default();
+    let windows: std::collections::BTreeMap<String, String> =
+        serde_json::from_str::<Value>(&profile.model_windows)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .map(|object| object.into_iter()
+                .filter_map(|(key, value)| value.as_str().map(|text| (key, text.to_string())))
+                .collect())
+            .unwrap_or_default();
+    let fallback = crate::model_suffix::parse_window_token(&profile.context_window);
+    for model in models {
+        let manual = crate::model_suffix::lookup_model_map(&windows, model)
+            .and_then(|token| crate::model_suffix::parse_window_token(token));
+        if let Some(window) = manual {
+            // 逐模型手工窗口优先级最高，覆盖内置模板。
+            let entry = metadata.entry(model.clone()).or_insert_with(|| json!({}));
+            for field in ["contextWindow", "maxContextWindow", "context_window", "max_context_window"] {
+                entry[field] = json!(window);
+            }
+            continue;
+        }
+        // 没有手工窗口时，供应商级「上下文大小」只作兜底：模型模板里已经声明了
+        // 自己的窗口就别拿全局值盖掉它。否则多模型列表 + 全局窗口会把每个模型都
+        // 压成同一个数，模型自身的真实窗口反而丢失（issue #2590）。
+        let Some(fallback) = fallback else { continue };
+        let entry = metadata.entry(model.clone()).or_insert_with(|| json!({}));
+        for field in ["contextWindow", "maxContextWindow", "context_window", "max_context_window"] {
+            let missing = entry
+                .get(field)
+                .and_then(Value::as_u64)
+                .is_none_or(|existing| existing == 0);
+            if missing {
+                entry[field] = json!(fallback);
+            }
+        }
+    }
+    Value::Object(metadata)
+}
+
+#[cfg(test)]
+mod window_override_tests {
+    use super::*;
+
+    #[test]
+    fn manual_window_precedes_profile_and_builtin_metadata() {
+        let models = vec!["gpt-5.5".to_string(), "vendor-model".to_string()];
+        let profile = RelayProfile {
+            model_windows: r#"{"GPT-5.5[1M]":"1M"}"#.into(),
+            context_window: "128K".into(),
+            ..Default::default()
+        };
+        let metadata = relay_profile_model_ui_metadata_map(&profile, &models);
+        for field in ["contextWindow", "maxContextWindow", "context_window", "max_context_window"] {
+            assert_eq!(metadata["gpt-5.5"][field], 1_000_000);
+            assert_eq!(metadata["vendor-model"][field], 128_000);
+        }
+
+        // issue #2590：全局窗口只兜底，不能盖掉模型模板自带的窗口。
+        // 同一份列表里 gpt-5.5 有内置模板、vendor-model 没有，前者应保持模板值。
+        let builtin_only = relay_profile_model_ui_metadata_map(&RelayProfile::default(), &models);
+        let builtin_window = builtin_only["gpt-5.5"]["contextWindow"]
+            .as_u64()
+            .expect("gpt-5.5 应有内置窗口");
+        assert_ne!(builtin_window, 128_000, "前置条件：内置窗口不应恰好等于全局值");
+        assert_eq!(metadata["gpt-5.5"]["contextWindow"], 1_000_000);
+        let global_only = RelayProfile {
+            context_window: "128K".into(),
+            ..Default::default()
+        };
+        let with_global = relay_profile_model_ui_metadata_map(&global_only, &models);
+        assert_eq!(
+            with_global["gpt-5.5"]["contextWindow"], builtin_window,
+            "全局窗口不应压过内置模板"
+        );
+        assert_eq!(with_global["vendor-model"]["contextWindow"], 128_000);
+
+        let metadata = relay_profile_model_ui_metadata_map(&RelayProfile::default(), &models);
+        assert!(metadata["gpt-5.5"]["contextWindow"].as_u64().is_some());
+        assert!(metadata.get("vendor-model").is_none());
+    }
 }
 
 pub async fn read_codex_model_catalog_from_home(
@@ -184,6 +484,7 @@ pub async fn read_codex_model_catalog_from_home(
             "message": error,
             "service_tier": service_tier_value(&effective),
             "model": model,
+            "effective_config_model": config.effective_model,
             "model_provider": model_provider,
             "provider_name": provider_name,
             "default_model": "",
@@ -250,6 +551,7 @@ pub async fn read_codex_model_catalog_from_home(
         "path": config_path.to_string_lossy(),
         "service_tier": service_tier_value(&effective),
         "model": model,
+        "effective_config_model": config.effective_model,
         "model_provider": model_provider,
         "provider_name": provider_name,
         "default_model": default_model,
@@ -308,7 +610,10 @@ fn load_codex_config(path: &Path) -> (CodexConfig, HashMap<String, String>, Opti
 }
 
 fn parse_codex_config(contents: &str) -> CodexConfig {
-    let mut config = CodexConfig::default();
+    let mut config = CodexConfig {
+        effective_model: effective_config_model(contents),
+        ..CodexConfig::default()
+    };
     let mut section = ConfigSection::Root;
     for line in contents.lines() {
         let trimmed = line.trim();
@@ -432,6 +737,7 @@ fn model_sources_from_environment(
             api_key
         },
         headers: Vec::new(),
+        anthropic: false,
     }]
 }
 
@@ -469,6 +775,7 @@ fn model_source_from_config(
         base_url,
         api_key,
         headers: Vec::new(),
+        anthropic: false,
     })
 }
 
@@ -528,7 +835,24 @@ async fn fetch_models_from_source_with_timeout(
     source: &ModelSource,
     timeout: std::time::Duration,
 ) -> (Vec<String>, Value) {
-    let endpoint = models_endpoint(&source.base_url);
+    let (models, status, _) = fetch_models_payload_from_source(client, source, timeout).await;
+    (models, status)
+}
+
+/// 拉一次模型列表，除了模型名和状态，还带回解析好的响应体（拿到模型时才有），
+/// 供「从上游同步上下文窗口 / 思考等级」读模型元数据（#2807）。请求、超时、错误判定与
+/// [`fetch_models_from_source_with_timeout`] 完全相同，不另发请求。
+async fn fetch_models_payload_from_source(
+    client: &reqwest::Client,
+    source: &ModelSource,
+    timeout: std::time::Duration,
+) -> (Vec<String>, Value, Option<Value>) {
+    let mut endpoint = models_endpoint(&source.base_url);
+    if source.anthropic && !endpoint.is_empty() {
+        // Anthropic 的 /v1/models 默认一页 20 条，一次取满（上限 1000）。
+        endpoint.push(if endpoint.contains('?') { '&' } else { '?' });
+        endpoint.push_str("limit=1000");
+    }
     let mut safe_source = json!({
         "id": source.source_id,
         "type": source.source_type,
@@ -541,15 +865,26 @@ async fn fetch_models_from_source_with_timeout(
         safe_source["status"] = json!("failed");
         safe_source["message"] = json!("Missing base URL");
         safe_source["models"] = json!(0);
-        return (Vec::new(), safe_source);
+        return (Vec::new(), safe_source, None);
     }
 
     let mut request = client
         .get(&endpoint)
         .header(reqwest::header::ACCEPT, "application/json");
     // 与协议代理、供应商测试共用 relay_headers：显式 Authorization 优先于 API Key。
-    if !source.api_key.is_empty() && !crate::relay_headers::has_authorization(&source.headers) {
+    let has_header = |name: &str| source.headers.iter().any(|header| header.key.trim().eq_ignore_ascii_case(name));
+    let official_anthropic = source.anthropic && endpoint.contains("anthropic.com");
+    if !source.api_key.is_empty() && !crate::relay_headers::has_authorization(&source.headers) && !official_anthropic {
         request = request.bearer_auth(&source.api_key);
+    }
+    if source.anthropic {
+        // 官方只认 x-api-key；第三方中转常常两种都收，Bearer 已在上面带上。
+        if !source.api_key.is_empty() && !has_header("x-api-key") {
+            request = request.header("x-api-key", &source.api_key);
+        }
+        if !has_header("anthropic-version") {
+            request = request.header("anthropic-version", crate::anthropic_bridge::ANTHROPIC_VERSION);
+        }
     }
     request = crate::relay_headers::apply_headers(request, &source.headers);
 
@@ -561,15 +896,29 @@ async fn fetch_models_from_source_with_timeout(
     })
     .await
     {
-        Err(_elapsed) => failed_source(
-            safe_source,
-            format!(
-                "上游 {} 秒内未返回模型列表（已超时中断）",
-                timeout.as_secs()
-            ),
-        ),
-        Ok(Err(error)) => failed_source(safe_source, error.to_string()),
-        Ok(Ok((status_code, body))) => interpret_models_response(status_code, &body, safe_source),
+        Err(_elapsed) => {
+            let (models, status) = failed_source(
+                safe_source,
+                format!(
+                    "上游 {} 秒内未返回模型列表（已超时中断）",
+                    timeout.as_secs()
+                ),
+            );
+            (models, status, None)
+        }
+        Ok(Err(error)) => {
+            let (models, status) = failed_source(safe_source, error.to_string());
+            (models, status, None)
+        }
+        Ok(Ok((status_code, body))) => {
+            let (models, status) = interpret_models_response(status_code, &body, safe_source);
+            let payload = if models.is_empty() {
+                None
+            } else {
+                serde_json::from_str::<Value>(body.trim()).ok()
+            };
+            (models, status, payload)
+        }
     }
 }
 
@@ -713,6 +1062,58 @@ fn responses_api_status(status: &str, endpoint: &str, message: &str) -> Value {
 pub async fn fetch_relay_profile_model_ids(
     profile: &RelayProfile,
 ) -> anyhow::Result<(Vec<String>, String)> {
+    // 官方登录 profile 没有 Base URL：带账号 OAuth 凭据读官方模型目录，
+    // 「从上游获取」按钮对官方账号同样可用（issue 讨论场景：聚合成员要填模型列表）。
+    if crate::official_login::member_uses_official_login_transport(profile) {
+        return fetch_official_login_model_ids(profile).await;
+    }
+    let source = relay_profile_model_source(profile)?;
+    let endpoint = models_endpoint(&source.base_url);
+    let client = crate::http_client::proxied_client_for_relay(&profile.user_agent, &profile)?;
+    let (models, status) = fetch_models_from_source(&client, &source).await;
+    if models.is_empty() {
+        let message = status
+            .get("message")
+            .and_then(Value::as_str)
+            .unwrap_or("上游没有返回可用模型");
+        anyhow::bail!("{message}");
+    }
+    Ok((models, endpoint))
+}
+
+/// 拉供应商的 `/models`，返回整个响应体（模型名之外还有上游给的上下文窗口、思考等级等元数据，#2807）。
+/// 请求方式（代理、超时、请求头、Anthropic 分页）与 [`fetch_relay_profile_model_ids`] 相同；
+/// 官方登录供应商走的是官方目录，不在这里处理。没拿到模型时报错。
+pub async fn fetch_relay_profile_models_payload(profile: &RelayProfile) -> anyhow::Result<Value> {
+    if crate::official_login::member_uses_official_login_transport(profile) {
+        anyhow::bail!("官方登录供应商的模型目录由官方提供，不需要从上游同步");
+    }
+    let source = relay_profile_model_source(profile)?;
+    let client = crate::http_client::proxied_client_for_relay(&profile.user_agent, profile)?;
+    let (models, status, payload) =
+        fetch_models_payload_from_source(&client, &source, MODELS_FETCH_TIMEOUT).await;
+    match payload {
+        Some(payload) if !models.is_empty() => Ok(payload),
+        _ => {
+            let message = status
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("上游没有返回可用模型");
+            anyhow::bail!("{message}");
+        }
+    }
+}
+
+/// 供应商拉模型列表用的来源（地址、Key、自定义请求头、协议）。官方登录供应商缺凭据、地址为空时报错。
+fn relay_profile_model_source(profile: &RelayProfile) -> anyhow::Result<ModelSource> {
+    if crate::official_login::is_official_login_profile(profile)
+        && profile.base_url.trim().is_empty()
+    {
+        anyhow::bail!(
+            "官方登录供应商「{}」缺少 ChatGPT 登录凭据，请先导入或登录官方账号",
+            profile.name
+        );
+    }
     let source = ModelSource {
         source_id: format!("relay-profile:{}", profile.id),
         source_type: "relay_profile".to_string(),
@@ -726,23 +1127,107 @@ pub async fn fetch_relay_profile_model_ids(
         } else {
             profile.upstream_base_url.trim().to_string()
         },
-        api_key: profile.api_key.trim().to_string(),
+        api_key: crate::relay_config::relay_profile_api_key(profile),
         headers: profile.custom_headers.clone(),
+        anthropic: profile.protocol == crate::settings::RelayProtocol::AnthropicMessages,
     };
     if source.base_url.is_empty() {
         anyhow::bail!("Base URL 不能为空");
     }
-    let endpoint = models_endpoint(&source.base_url);
-    let client = crate::http_client::proxied_client(&profile.user_agent)?;
-    let (models, status) = fetch_models_from_source(&client, &source).await;
+    Ok(source)
+}
+
+/// 官方模型目录的客户端版本参数；与 Codex CLI 的取值保持一致。
+pub(crate) const OFFICIAL_MODELS_CLIENT_VERSION: &str = "0.159.0";
+
+/// 官方登录 profile 的模型列表：带账号 OAuth 凭据请求 chatgpt.com 官方目录。
+async fn fetch_official_login_model_ids(
+    profile: &RelayProfile,
+) -> anyhow::Result<(Vec<String>, String)> {
+    let credential = crate::official_login::resolve_official_credential(profile, false).await?;
+    let base = crate::official_login::official_base_url();
+    let endpoint = format!("{}/models", base.trim().trim_end_matches('/'));
+    let version = crate::gateway::chatgpt_backend::codex_version(
+        &crate::codex_home::default_codex_home_dir(),
+    );
+    let client = crate::http_client::proxied_client_for_relay(&profile.user_agent, &profile)?;
+    let mut request = client
+        .get(&endpoint)
+        .query(&[("client_version", version.as_str())])
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {}", credential.access_token.trim()),
+        )
+        .header("originator", "codex_cli_rs")
+        .header("version", &version)
+        .header(
+            reqwest::header::USER_AGENT,
+            crate::gateway::chatgpt_backend::codex_user_agent(&version),
+        )
+        .timeout(MODELS_FETCH_TIMEOUT);
+    if !credential.account_id.trim().is_empty() {
+        request = request.header("chatgpt-account-id", credential.account_id.trim());
+    }
+    let response = request.send().await.context("官方模型列表请求失败")?;
+    let status = response.status();
+    let text = response.text().await.unwrap_or_default();
+    if !status.is_success() {
+        anyhow::bail!(
+            "获取官方模型列表失败：HTTP {status} {}",
+            truncate_for_message(&text)
+        );
+    }
+    let value: Value = serde_json::from_str(&text).context("官方模型列表解析失败")?;
+    let models = parse_official_model_ids(&value);
     if models.is_empty() {
-        let message = status
-            .get("message")
-            .and_then(Value::as_str)
-            .unwrap_or("上游没有返回可用模型");
-        anyhow::bail!("{message}");
+        anyhow::bail!("官方账号没有返回可见模型");
     }
     Ok((models, endpoint))
+}
+
+/// 官方目录条目：slug/id/name 均可作为模型 id；`visibility=hide` 与
+/// `visible_in_picker=false` 是官方内部预留位，不进入供应商模型列表。
+/// 例外是 `codex-auto-review`：留在列表里才能在网关里选它当审批模型；
+/// 写进 Codex 目录时仍标成隐藏（见 `aggregate_catalog::catalog_visibility`）。
+pub(crate) fn parse_official_model_ids(value: &Value) -> Vec<String> {
+    let entries = value
+        .get("data")
+        .and_then(Value::as_array)
+        .or_else(|| value.get("models").and_then(Value::as_array))
+        .or_else(|| value.get("items").and_then(Value::as_array))
+        .or_else(|| value.as_array());
+    let Some(entries) = entries else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let (id, hidden) = match entry {
+            Value::String(id) => (id.trim().to_string(), false),
+            Value::Object(map) => {
+                let hidden = map
+                    .get("visibility")
+                    .and_then(Value::as_str)
+                    .is_some_and(|visibility| visibility.eq_ignore_ascii_case("hide"))
+                    || map.get("visible_in_picker").and_then(Value::as_bool) == Some(false);
+                let id = ["slug", "id", "name"]
+                    .iter()
+                    .find_map(|key| map.get(*key).and_then(Value::as_str))
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string();
+                (id, hidden)
+            }
+            _ => (String::new(), false),
+        };
+        let hidden =
+            hidden && !id.eq_ignore_ascii_case(crate::aggregate_catalog::CODEX_AUTO_REVIEW_MODEL);
+        if id.is_empty() || hidden || !seen.insert(id.clone()) {
+            continue;
+        }
+        ids.push(id);
+    }
+    ids
 }
 
 fn preferred_responses_api_status(sources: &[Value]) -> Value {
@@ -762,24 +1247,12 @@ fn preferred_responses_api_status(sources: &[Value]) -> Value {
 }
 
 fn models_endpoint(base_url: &str) -> String {
-    let cleaned = safe_url_for_status(base_url)
-        .trim_end_matches('/')
-        .to_string();
+    let cleaned = safe_url_for_status(base_url).trim_end_matches('/').to_string();
     if cleaned.is_empty() {
         return String::new();
     }
-    if cleaned.ends_with("/models") {
-        return cleaned;
-    }
-    // Only append the default `/v1` version prefix when the base URL does not
-    // already carry a version segment. Providers such as Volcano Engine ARK use
-    // a versioned base (e.g. `.../api/coding/v3`), so blindly appending
-    // `/v1/models` produced `.../api/coding/v3/v1/models` and 404'd. This mirrors
-    // the version handling already used by the protocol proxy. See issue #1349.
-    if crate::protocol_proxy::has_version_suffix(&cleaned) {
-        return format!("{cleaned}/models");
-    }
-    format!("{cleaned}/v1/models")
+    // 与实际代理共用规则，保留 /v1beta/openai 等已有路径；清理后的 URL 不含凭据。
+    crate::protocol_proxy::models_url(&cleaned)
 }
 
 fn parse_model_payload(payload: &Value) -> Vec<String> {
@@ -1019,6 +1492,100 @@ mod model_fetch_tests {
     use super::*;
 
     #[test]
+    fn relay_profile_model_catalog_keeps_configured_default_after_model_list_sorting() {
+        let profile = RelayProfile {
+            model: "qwen3-coder".into(),
+            model_list: "deepseek-coder\nqwen3-coder\nclaude-compatible".into(),
+            config_contents: "model = \"qwen3-coder\"\n".into(),
+            ..RelayProfile::default()
+        };
+        let home = tempfile::tempdir().unwrap();
+        let catalog = relay_profile_model_catalog_value(home.path(), &profile);
+
+        assert_eq!(catalog["default_model"], "qwen3-coder");
+    }
+
+    #[test]
+    fn effective_config_model_requires_valid_explicit_config_and_profile() {
+        for (config, expected) in [
+            ("", ""),
+            ("default_model = 'fallback'\n", ""),
+            ("model = ' root '\n", "root"),
+            (
+                "model = 'root'\nprofile = 'work'\n[profiles.work]\nmodel = 'profile'\n",
+                "profile",
+            ),
+            (
+                "model = 'root'\nprofile = 'work'\n[profiles.work]\nother = true\n",
+                "root",
+            ),
+            ("model = 'root'\nprofile = 'missing'\n", ""),
+            ("model = 'root'\nprofile = 5\n", ""),
+            (
+                "model = 'root'\nprofile = 'work'\n[profiles.work]\nmodel = 5\n",
+                "",
+            ),
+            ("model = 'root'\nmodel = 'duplicate'\n", ""),
+            ("model = [invalid\n", ""),
+        ] {
+            assert_eq!(effective_config_model(config), expected, "{config}");
+        }
+    }
+
+    #[test]
+    fn relay_profile_catalog_default_identity_comes_from_live_config() {
+        let home = tempfile::tempdir().unwrap();
+        let profile = RelayProfile {
+            model: "candidate".into(),
+            model_list: "candidate\nother".into(),
+            config_contents: "model = 'snapshot'\n".into(),
+            ..RelayProfile::default()
+        };
+        let catalog = relay_profile_model_catalog_value(home.path(), &profile);
+        assert_eq!(catalog["default_model"], "candidate");
+        assert_eq!(catalog["effective_config_model"], "");
+        std::fs::write(
+            home.path().join("config.toml"),
+            "model = 'root'\nprofile = 'work'\n[profiles.work]\nmodel = 'live'\n",
+        )
+        .unwrap();
+        let catalog = relay_profile_model_catalog_value(home.path(), &profile);
+        assert_eq!(catalog["effective_config_model"], "live");
+        assert!(!catalog["models"].as_array().unwrap().contains(&json!("live")));
+    }
+
+    #[test]
+    fn model_list_endpoint_preserves_custom_prefixes_and_removes_credentials() {
+        for (base, expected) in [
+            ("https://example.test/v1beta/openai/", "https://example.test/v1beta/openai/models"),
+            ("https://example.test", "https://example.test/v1/models"),
+            ("https://example.test/api/coding/v3", "https://example.test/api/coding/v3/models"),
+            ("https://user:secret@example.test/v1/models?token=secret", "https://example.test/v1/models"),
+        ] { assert_eq!(models_endpoint(base), expected); }
+    }
+
+    #[test]
+    fn relay_model_priority_declaration_reaches_ui_without_enabling_other_models() {
+        let profile = RelayProfile {
+            model: "grok-custom".into(), model_list: "grok-custom\ngrok-unknown\ngpt-5.4".into(),
+            model_metadata: json!({
+                "GROK-CUSTOM[1M]": {"service_tiers":[{"id":"flex"}], "additional_speed_tiers":["slow"], "codex_plus_fast_support":"supported"},
+                "gpt-5.4": {"codex_plus_fast_support":"unsupported"}
+            }).to_string(),
+            ..RelayProfile::default()
+        };
+        let home = tempfile::tempdir().unwrap();
+        let catalog = relay_profile_model_catalog_value(home.path(), &profile);
+        let metadata = &catalog["modelMetadata"];
+        assert_eq!(metadata["grok-custom"]["prioritySupportOverride"], true);
+        assert_eq!(metadata["gpt-5.4"]["prioritySupportOverride"], false);
+        assert_eq!(metadata["grok-custom"]["serviceTiers"][0]["id"], "flex");
+        assert_eq!(metadata["grok-custom"]["serviceTiers"][1]["id"], "priority");
+        assert!(metadata.get("grok-unknown").is_none());
+        assert!(metadata["grok-custom"].get("codex_plus_fast_support").is_none());
+    }
+
+    #[test]
     fn business_error_message_detects_zhipu_style_envelope() {
         // 智谱 /api/v1 Codex 专属端点在 key 缺失或无效时返回 HTTP 200 + 业务信封（#2190）
         let payload = json!({"code": 401, "msg": "令牌已过期或验证不正确", "success": false});
@@ -1182,6 +1749,7 @@ mod model_fetch_tests {
             base_url: format!("http://{address}"),
             api_key: "key".to_string(),
             headers: Vec::new(),
+            anthropic: false,
         };
         let (_, status) = fetch_models_from_source_with_timeout(
             &client,
@@ -1199,5 +1767,191 @@ mod model_fetch_tests {
             status["message"]
         );
         drop(listener);
+    }
+
+    #[test]
+    fn official_model_ids_skip_hidden_entries_and_dedupe() {
+        let value = json!({
+            "data": [
+                {"slug": "gpt-6.1-sol"},
+                {"slug": "gpt-reserve", "visibility": "hide"},
+                {"id": "gpt-6-sol"},
+                {"name": "gpt-6-luna", "visible_in_picker": false},
+                {"slug": "codex-auto-review", "visibility": "hide"},
+                "gpt-6.1-sol",
+                {"slug": "   "}
+            ]
+        });
+        // 审批模型虽然隐藏，也要留下，网关才能把它选作审批模型。
+        assert_eq!(
+            parse_official_model_ids(&value),
+            vec!["gpt-6.1-sol", "gpt-6-sol", "codex-auto-review"]
+        );
+    }
+
+    #[test]
+    fn official_model_ids_accept_models_and_items_shapes() {
+        assert_eq!(
+            parse_official_model_ids(&json!({"models": [{"slug": "a"}]})),
+            vec!["a"]
+        );
+        assert_eq!(
+            parse_official_model_ids(&json!({"items": ["b"]})),
+            vec!["b"]
+        );
+        assert!(parse_official_model_ids(&json!({"other": []})).is_empty());
+    }
+
+    /// 官方登录 profile 的模型拉取：带 OAuth 凭据请求官方 models 端点，跳过隐藏位。
+    struct OfficialBaseUrlEnvGuard {
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl OfficialBaseUrlEnvGuard {
+        fn set(value: &str) -> Self {
+            let previous = std::env::var_os("CODEX_PLUS_OFFICIAL_BASE_URL");
+            unsafe {
+                std::env::set_var("CODEX_PLUS_OFFICIAL_BASE_URL", value);
+            }
+            Self { previous }
+        }
+    }
+
+    impl Drop for OfficialBaseUrlEnvGuard {
+        fn drop(&mut self) {
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var("CODEX_PLUS_OFFICIAL_BASE_URL", value),
+                    None => std::env::remove_var("CODEX_PLUS_OFFICIAL_BASE_URL"),
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn official_login_profile_fetches_models_with_oauth_headers() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut buffer = [0_u8; 4096];
+            let read = stream.read(&mut buffer).await.unwrap();
+            let request = String::from_utf8_lossy(&buffer[..read]).to_string();
+            let body = r#"{"data":[{"slug":"gpt-6.1-sol"},{"slug":"gpt-reserve","visibility":"hide"}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            stream.write_all(response.as_bytes()).await.unwrap();
+            request
+        });
+        let _guard = OfficialBaseUrlEnvGuard::set(&format!("http://{address}/backend-api/codex"));
+
+        let profile = RelayProfile {
+            id: "official".to_string(),
+            name: "官方登录".to_string(),
+            relay_mode: crate::settings::RelayMode::Official,
+            auth_contents: r#"{"auth_mode":"chatgpt","tokens":{"access_token":"official-access","refresh_token":"r","account_id":"acct-1"}}"#.to_string(),
+            ..RelayProfile::default()
+        };
+        let (models, endpoint) = fetch_relay_profile_model_ids(&profile).await.unwrap();
+        assert_eq!(models, vec!["gpt-6.1-sol"]);
+        assert!(endpoint.ends_with("/backend-api/codex/models"), "{endpoint}");
+
+        let request = server.await.unwrap();
+        let lower = request.to_ascii_lowercase();
+        assert!(
+            request.starts_with("GET /backend-api/codex/models?client_version="),
+            "{request}"
+        );
+        assert!(
+            lower.contains("authorization: bearer official-access"),
+            "{request}"
+        );
+        assert!(lower.contains("chatgpt-account-id: acct-1"), "{request}");
+        assert!(lower.contains("originator: codex_cli_rs"), "{request}");
+    }
+}
+
+#[cfg(test)]
+mod price_overlay_tests {
+    use super::*;
+
+    const PRICES: &str = r#"{
+      "deepseek": { "id": "deepseek", "name": "DeepSeek", "api": "https://api.deepseek.com",
+        "models": { "deepseek-chat": { "id": "deepseek-chat", "cost": { "input": 0.27, "output": 1.1, "cache_read": 0.07 } } } },
+      "anthropic": { "id": "anthropic", "name": "Anthropic",
+        "models": { "claude-sonnet-4-5": { "id": "claude-sonnet-4-5", "cost": { "input": 3, "output": 15 } } } },
+      "zhipuai": { "id": "zhipuai", "name": "Zhipu AI", "api": "https://open.bigmodel.cn/api/paas/v4",
+        "models": { "glm-4.6": { "id": "glm-4.6", "cost": { "input": 0.6, "output": 2.2 } } } }
+    }"#;
+
+    fn prices() -> crate::model_pricing::PriceCatalog {
+        crate::model_pricing::PriceCatalog::parse(PRICES).unwrap()
+    }
+
+    fn settings() -> BackendSettings {
+        let mut settings = BackendSettings::default();
+        settings.relay_profiles = vec![
+            RelayProfile {
+                id: "deepseek".to_string(),
+                base_url: "https://api.deepseek.com/v1".to_string(),
+                ..RelayProfile::default()
+            },
+            RelayProfile {
+                id: "glm".to_string(),
+                base_url: "https://open.bigmodel.cn/api/paas/v4".to_string(),
+                ..RelayProfile::default()
+            },
+        ];
+        settings
+    }
+
+    #[test]
+    fn aggregate_entries_lookup_with_member_base_url_and_bare_upstream() {
+        let settings = settings();
+        let mut catalog = json!({
+            "model_provider": "agg",
+            "modelMetadata": {
+                "cpx-deepseek/deepseek-chat": { "codex_plus_group_id": "deepseek" },
+                "cpx-glm/glm-4.6": { "codex_plus_group_id": "glm" },
+                "deepseek-chat": { "codex_plus_group_id": "deepseek" },
+                "cpx-glm/claude-sonnet-4-5": { "codex_plus_group_id": "glm" },
+                "unknown-model": { "codex_plus_group_id": "deepseek" },
+                "no-group": {}
+            }
+        });
+        let catalog_provider = catalog["model_provider"].as_str().unwrap().to_string();
+        let metadata = catalog["modelMetadata"].as_object_mut().unwrap();
+        overlay_prices(metadata, &prices(), |group_id| {
+            group_base_url(Some(&settings), &catalog_provider, group_id)
+        });
+        let entry = &catalog["modelMetadata"]["cpx-deepseek/deepseek-chat"]["codex_plus_price"];
+        assert_eq!((entry["input"].as_f64(), entry["output"].as_f64()), (Some(0.27), Some(1.1)));
+        assert_eq!(entry["provider"].as_str(), Some("DeepSeek"));
+        // 默认成员的裸名 slug 一样能查到，上游名不会被成员前缀卡住。
+        assert!(catalog["modelMetadata"]["deepseek-chat"]["codex_plus_price"].is_object());
+        // 成员前缀剥掉后按供应商地址查：glm 的 claude 走 zhipu 价目查不到就退回原厂提示价。
+        let resold = &catalog["modelMetadata"]["cpx-glm/claude-sonnet-4-5"]["codex_plus_price"];
+        assert_eq!(resold["provider"].as_str(), Some("Anthropic"));
+        assert!(catalog["modelMetadata"]["unknown-model"].get("codex_plus_price").is_none());
+        // 没有分组归属的条目按目录级 model_provider 找 profile，找不到就按名猜。
+        assert!(catalog["modelMetadata"]["no-group"].get("codex_plus_price").is_none());
+    }
+
+    #[test]
+    fn entry_upstream_strips_only_member_prefix() {
+        let group = "deepseek";
+        assert_eq!(
+            entry_upstream_model("cpx-deepseek/anthropic/claude-sonnet-4-5", group),
+            "anthropic/claude-sonnet-4-5"
+        );
+        assert_eq!(entry_upstream_model("deepseek-chat", group), "deepseek-chat");
+        assert_eq!(entry_upstream_model("cpx-other/x", ""), "cpx-other/x");
     }
 }

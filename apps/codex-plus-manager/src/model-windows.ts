@@ -45,11 +45,11 @@ export type ModelWindowRowsValidationIssue = {
 
 /// 按拖动结果移动模型行，保留行内的窗口、压缩和图片处理配置。
 /// 索引无效或指向同一行时返回原数组引用，避免无意义的状态更新。
-export function reorderModelWindowRows(
-  rows: ModelWindowRow[],
+export function reorderModelWindowRows<T extends ModelWindowRow>(
+  rows: T[],
   activeIndex: number,
   overIndex: number,
-): ModelWindowRow[] {
+): T[] {
   if (
     activeIndex < 0
     || activeIndex >= rows.length
@@ -156,7 +156,8 @@ export function mergeModelWindowRows(
   };
   currentRows.forEach(append);
   incomingRows.forEach(append);
-  return rows.length ? rows : [{ model: "", window: "", autoCompact: "", imageHandling: "send-as-is" }];
+  // 没有模型就返回空列表：调用方据此不渲染任何空行。
+  return rows;
 }
 
 export function modelWindowRowsFromProfile(
@@ -212,7 +213,8 @@ export function modelWindowRowsFromProfile(
         imageHandling: lookupModelMapEntry(vlmMap, model) ?? "send-as-is",
       };
     });
-  return rows.length ? rows : [{ model: "", window: "", autoCompact: "", imageHandling: "send-as-is" }];
+  // 没有模型就返回空列表：编辑器不显示空行，用户用「添加模型」显式加行。
+  return rows;
 }
 
 export function serializeModelWindowRows(rows: ModelWindowRow[]): {
