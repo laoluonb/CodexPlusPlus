@@ -51,7 +51,11 @@ jobs:
 
       - name: Build Windows stop context diagnostic
         if: github.event_name == 'workflow_dispatch'
-        run: cargo build --release -p codex-plus-core --example check_windows_stop_context
+        # 独立 core 示例的依赖组合与桌面程序不同；旧缓存的 build-script 输出
+        # 可能指向未随依赖缓存恢复的原生库，单独重新准备这个包即可。
+        run: |
+          cargo clean --release -p sherpa-onnx-sys
+          cargo build --release -p codex-plus-core --example check_windows_stop_context
 
       - name: Upload Windows stop context diagnostic
         if: github.event_name == 'workflow_dispatch'
