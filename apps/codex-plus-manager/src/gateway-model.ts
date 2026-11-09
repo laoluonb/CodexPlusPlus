@@ -1184,15 +1184,10 @@ const GATEWAY_EXTRA_PRESETS: GatewayPreset[] = [
 
 /** 「添加供应商」里的全部预设：厂商（官方 / 国内官方）、中转、本机。 */
 /**
- * 赞助商：「添加供应商」目录里单独一组，放在最前面。到期日与赞助商广告清单一致，
- * 过了到期日（当天仍显示）就不再出现在目录里。续约时改这里的日期。
+ * 「添加供应商」最前面的服务商入口。未设置到期日时持续显示。
  */
-export const SPONSORS: Array<{ id: string; expiresAt: string }> = [
-  { id: "jojocode-max", expiresAt: "2029-06-15" },
-  { id: "runapi", expiresAt: "2026-12-07" },
-  { id: "apikeyfun", expiresAt: "2026-11-22" },
-  { id: "cccccc-api", expiresAt: "2026-12-01" },
-  { id: "tokenmy", expiresAt: "2026-11-20" },
+export const SPONSORS: Array<{ id: string; expiresAt?: string }> = [
+  { id: "ugqai" },
 ];
 
 /** 本地日期（YYYY-MM-DD），与到期日按天比较。 */
@@ -1203,7 +1198,7 @@ function localDay(now: Date): string {
 
 export function activeSponsorIds(now: Date = new Date()): string[] {
   const today = localDay(now);
-  return SPONSORS.filter((sponsor) => sponsor.expiresAt >= today).map((sponsor) => sponsor.id);
+  return SPONSORS.filter((sponsor) => !sponsor.expiresAt || sponsor.expiresAt >= today).map((sponsor) => sponsor.id);
 }
 
 export function gatewayPresets(now: Date = new Date()): GatewayPreset[] {

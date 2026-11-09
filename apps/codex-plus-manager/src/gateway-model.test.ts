@@ -506,15 +506,15 @@ test("普通供应商的价格与代理在详情里编辑，官方账号可在�
 test("赞助商单独一组放在「添加供应商」最前面，不再混在中转里", () => {
   const presets = gatewayPresets(new Date(2026, 9, 26));
   const sponsors = presets.filter((preset) => preset.section === "sponsor").map((preset) => preset.key);
-  assert.deepEqual(sponsors, ["jojocode-max", "runapi", "apikeyfun", "cccccc-api", "tokenmy"]);
-  // 到期日当天仍显示，第二天起从目录里去掉。
+  assert.deepEqual(sponsors, ["ugqai"]);
   const keys = (date: Date) => gatewayPresets(date).map((preset) => preset.key);
-  assert.ok(keys(new Date(2026, 11, 7)).includes("runapi"));
-  assert.ok(!keys(new Date(2026, 11, 8)).includes("runapi"));
-  assert.ok(keys(new Date(2026, 10, 20)).includes("tokenmy"));
-  assert.ok(!keys(new Date(2026, 10, 21)).includes("tokenmy"));
-  assert.deepEqual(activeSponsorIds(new Date(2026, 10, 23)), ["jojocode-max", "runapi", "cccccc-api"]);
-  assert.deepEqual(activeSponsorIds(new Date(2026, 11, 2)), ["jojocode-max", "runapi"]);
+  for (const date of [new Date(2026, 10, 9), new Date(2030, 0, 1)]) {
+    assert.deepEqual(activeSponsorIds(date), ["ugqai"]);
+    for (const removed of ["jojocode-max", "runapi", "apikeyfun", "cccccc-api", "tokenmy"]) {
+      assert.ok(!keys(date).includes(removed), removed);
+    }
+  }
+  assert.equal(presets.filter((preset) => preset.key === "ugqai").length, 1);
   for (const gone of ["pateway", "therouter", "shengsuanyun", "ccsub"]) assert.ok(!keys(new Date(2026, 9, 26)).includes(gone), gone);
   assert.equal(presets[0].section, "sponsor");
   const relays = presets.filter((preset) => preset.section === "relay").map((preset) => preset.key);

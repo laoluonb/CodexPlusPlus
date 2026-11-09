@@ -185,27 +185,6 @@ export const PRESETS: ProviderPreset[] = [
 
   // ── 聚合/中转 ──
   {
-    id: "jojocode-max",
-    name: "JOJO Code",
-    websiteUrl: "https://max2.jojocode.com/",
-    apiKeyUrl: "https://max2.jojocode.com/",
-    category: "aggregator",
-    baseUrl: "https://max2.jojocode.com/v1",
-    protocol: "responses",
-    // 模型留空：添加时「从上游获取」或手填。
-    model: "",
-  },
-  {
-    id: "runapi",
-    name: "RunAPI",
-    websiteUrl: "https://runapi.host",
-    apiKeyUrl: "https://runapi.host",
-    category: "aggregator",
-    baseUrl: "https://runapi.host/v1",
-    protocol: "responses",
-    model: "gpt-5.5",
-  },
-  {
     id: "siliconflow",
     name: "SiliconFlow",
     websiteUrl: "https://siliconflow.cn",
@@ -234,38 +213,6 @@ export const PRESETS: ProviderPreset[] = [
     protocol: "responses",
     model: "gpt-5.5",
     websiteUrl: "https://aihubmix.com",
-  },
-  {
-    id: "apikeyfun",
-    name: "APIKEY.FUN",
-    category: "aggregator",
-    baseUrl: "https://api.apikey.fun/v1",
-    protocol: "responses",
-    model: "gpt-5.5",
-    modelList: ["gpt-5.5"],
-    websiteUrl: "https://apikey.fun",
-  },
-  {
-    id: "cccccc-api",
-    name: "ccccccAPI",
-    websiteUrl: "https://dzhsmartai.com",
-    apiKeyUrl: "https://dzhsmartai.com/register?promo=CODEXPLUSPLUS",
-    category: "aggregator",
-    baseUrl: "https://dzhsmartai.com/v1",
-    protocol: "responses",
-    // 模型留空：添加时「从上游获取」或手填。
-    model: "",
-  },
-  {
-    id: "tokenmy",
-    name: "TokenMy",
-    websiteUrl: "https://agent.tokenmy.ai",
-    apiKeyUrl: "https://agent.tokenmy.ai",
-    category: "aggregator",
-    baseUrl: "https://agent.tokenmy.ai/v1",
-    protocol: "responses",
-    // 模型留空：添加时「从上游获取」或手填。
-    model: "",
   },
   {
     id: "novita",

@@ -59,10 +59,9 @@ test("expired GrooRoute sponsor preset is removed", () => {
   assert.equal(PRESETS.some((candidate) => candidate.id === "grooroute"), false);
 });
 
-test("RunAPI preset uses the current v1 Base URL", () => {
-  const preset = PRESETS.find((candidate) => candidate.id === "runapi");
-  assert.ok(preset);
-  assert.equal(preset.baseUrl, "https://runapi.host/v1");
-  assert.equal(preset.protocol, "responses");
+test("removed sponsor presets are absent from all provider catalogs", () => {
+  for (const id of ["jojocode-max", "runapi", "apikeyfun", "cccccc-api", "tokenmy"]) {
+    assert.equal(PRESETS.some((preset) => preset.id === id), false, id);
+  }
 });
 });
