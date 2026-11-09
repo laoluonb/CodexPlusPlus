@@ -1393,7 +1393,7 @@ impl LaunchHooks for DefaultLaunchHooks {
         &self,
         app_dir: &Path,
         debug_port: u16,
-        _settings: &BackendSettings,
+        settings: &BackendSettings,
         extra_args: &[String],
         instance: &LaunchInstance,
     ) -> anyhow::Result<CodexLaunch> {
