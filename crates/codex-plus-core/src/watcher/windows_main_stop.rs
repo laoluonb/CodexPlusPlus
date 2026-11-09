@@ -65,11 +65,74 @@ pub fn stop_windows_main_codex_processes_with_args_and_wait(
 ) -> Result<usize> {
     use crate::windows_integration::{VerifiedStopProcess, bounded_process_snapshot};
 
+    let (context, listener) =
+        prepare_stop_context(expected_executable, owned_debug_port, launch_extra_args)?;
     let expected_name = expected_executable
         .file_name()
         .and_then(|name| name.to_str())
         .filter(|name| crate::app_paths::is_windows_desktop_app_executable_name(name))
         .ok_or_else(|| anyhow::anyhow!("缺少可信的 Codex 桌面应用入口"))?;
+    let candidates = || -> Result<Vec<u32>> {
+        let mut candidates = Vec::new();
+        for process in bounded_process_snapshot(65_536)? {
+            if !process.exe_file.eq_ignore_ascii_case(expected_name) {
+                continue;
+            }
+            if matches!(
+                crate::windows_integration::process_session_id(process.process_id)?,
+                Some(session_id) if session_id == context.owner.session_id
+            ) {
+                candidates.push(process.process_id);
+            }
+        }
+        Ok(candidates)
+    };
+    let stopped = capture_and_stop(
+        candidates()?,
+        VerifiedStopProcess::capture,
+        &context,
+        Duration::from_millis(super::RESTART_STOP_WAIT_TIMEOUT_MS),
+        || std::thread::sleep(Duration::from_millis(super::RESTART_STOP_WAIT_INTERVAL_MS)),
+    )?;
+    ensure_no_live_targets(candidates()?, VerifiedStopProcess::capture, &context)?;
+    if let Some(listener) = listener {
+        anyhow::ensure!(!listener.is_alive()?, "已接管的 Codex 原监听进程尚未退出");
+    }
+    if let Some(port) = owned_debug_port {
+        anyhow::ensure!(
+            crate::windows_integration::loopback_listener_process_ids(port)?.is_empty(),
+            "停止后调试端口出现其他监听者，未继续启动"
+        );
+    }
+    Ok(stopped)
+}
+
+/// 只读复核停止前的上下文，不申请停止权限、不发送关闭消息。
+#[cfg(windows)]
+pub fn check_windows_main_codex_stop_context(
+    expected_executable: &Path,
+    owned_debug_port: Option<u16>,
+    launch_extra_args: Option<&[String]>,
+) -> Result<()> {
+    prepare_stop_context(expected_executable, owned_debug_port, launch_extra_args)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn prepare_stop_context(
+    expected_executable: &Path,
+    owned_debug_port: Option<u16>,
+    launch_extra_args: Option<&[String]>,
+) -> Result<(StopContext, Option<crate::windows_integration::TrackedWindowsProcess>)> {
+    use crate::windows_integration::VerifiedStopProcess;
+
+    anyhow::ensure!(
+        expected_executable
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(crate::app_paths::is_windows_desktop_app_executable_name),
+        "缺少可信的 Codex 桌面应用入口"
+    );
     let manager = VerifiedStopProcess::capture(std::process::id(), false)?
         .ok_or_else(|| anyhow::anyhow!("无法持有当前管理器的进程身份"))?;
     let mut context = stop_context(
@@ -106,47 +169,41 @@ pub fn stop_windows_main_codex_processes_with_args_and_wait(
     } else {
         None
     };
-    let candidates = || -> Result<Vec<u32>> {
-        let mut candidates = Vec::new();
-        for process in bounded_process_snapshot(65_536)? {
-            if !process.exe_file.eq_ignore_ascii_case(expected_name) {
-                continue;
-            }
-            if matches!(
-                crate::windows_integration::process_session_id(process.process_id)?,
-                Some(session_id) if session_id == context.owner.session_id
-            ) {
-                candidates.push(process.process_id);
-            }
-        }
-        Ok(candidates)
-    };
-    let stopped = capture_and_stop(
-        candidates()?,
-        VerifiedStopProcess::capture,
-        &context,
-        Duration::from_millis(super::RESTART_STOP_WAIT_TIMEOUT_MS),
-        || std::thread::sleep(Duration::from_millis(super::RESTART_STOP_WAIT_INTERVAL_MS)),
-    )?;
-    ensure_no_live_targets(candidates()?, VerifiedStopProcess::capture, &context)?;
-    if let Some(listener) = listener {
-        anyhow::ensure!(!listener.is_alive()?, "已接管的 Codex 原监听进程尚未退出");
-    }
-    if let Some(port) = owned_debug_port {
-        anyhow::ensure!(
-            crate::windows_integration::loopback_listener_process_ids(port)?.is_empty(),
-            "停止后调试端口出现其他监听者，未继续启动"
-        );
-    }
-    Ok(stopped)
+    Ok((context, listener))
 }
 
 fn ensure_listener_matches(facts: &ProcessFacts, context: &StopContext) -> Result<()> {
-    anyhow::ensure!(
-        target_matches(facts, context)?,
-        "已接管的 Codex 监听进程与待停止的用户数据上下文不一致，未结束任何进程"
+    let classification = classify_target(facts, context)?;
+    let reason = match classification {
+        TargetClassification::Main => return Ok(()),
+        TargetClassification::Mismatch(reason) => reason,
+        TargetClassification::Child => "Chromium 子进程",
+        TargetClassification::Irrelevant => "应用路径或登录身份",
+    };
+    let image = normalized_path(&facts.image)?;
+    let _ = crate::diagnostic_log::append_diagnostic_log(
+        "watcher.windows_stop_context_mismatch",
+        serde_json::json!({
+            "reason": reason,
+            "expected_executable": context.executable,
+            "actual_executable": image,
+            "same_image": image_matches(&context.executable, &image),
+            "same_user": facts.owner.user_sid == context.owner.user_sid,
+            "same_login": facts.owner.authentication_id == context.owner.authentication_id,
+            "same_session": facts.owner.session_id == context.owner.session_id,
+            "expected_appdata": context.app_data,
+            "actual_appdata": facts.environment.app_data,
+            "expected_user_data": context.user_data,
+            "actual_user_data": effective_user_data(
+                parsed_arguments(&facts.arguments, &image)?.user_data,
+                &facts.environment,
+            )?,
+            "listener_only": context.debug_port_only,
+        }),
     );
-    Ok(())
+    anyhow::bail!(
+        "已接管的 Codex 监听进程核验不一致（{reason}），未结束任何进程"
+    )
 }
 
 fn stop_context(

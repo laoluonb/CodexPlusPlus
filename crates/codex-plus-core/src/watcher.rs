@@ -10,6 +10,7 @@ pub use crate::windows_integration::WindowsProcessInfo;
 mod windows_main_stop;
 #[cfg(windows)]
 pub use windows_main_stop::{
+    check_windows_main_codex_stop_context,
     stop_windows_main_codex_processes_and_wait,
     stop_windows_main_codex_processes_with_args_and_wait,
 };
