@@ -55,20 +55,29 @@ jobs:
         # 可能指向未随依赖缓存恢复的原生库，单独重新准备这个包即可。
         run: |
           $nativeRoot = [IO.Path]::GetFullPath((Join-Path $env:GITHUB_WORKSPACE 'target/sherpa-onnx-prebuilt'))
+          $staleNativeRoot = [IO.Path]::GetFullPath("$nativeRoot.incomplete-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT")
           $workspaceRoot = [IO.Path]::GetFullPath($env:GITHUB_WORKSPACE).TrimEnd('\') + '\'
-          if (-not $nativeRoot.StartsWith($workspaceRoot, [StringComparison]::OrdinalIgnoreCase)) {
+          if (-not $nativeRoot.StartsWith($workspaceRoot, [StringComparison]::OrdinalIgnoreCase) -or
+              -not $staleNativeRoot.StartsWith($workspaceRoot, [StringComparison]::OrdinalIgnoreCase)) {
             throw '原生库缓存路径超出工作区'
           }
           if (Test-Path -LiteralPath $nativeRoot) {
-            Move-Item -LiteralPath $nativeRoot -Destination "$nativeRoot.incomplete-$env:GITHUB_RUN_ID"
+            Move-Item -LiteralPath $nativeRoot -Destination $staleNativeRoot
           }
           $archiveDir = Join-Path $env:RUNNER_TEMP "codexpp-native-$env:GITHUB_RUN_ID"
           New-Item -ItemType Directory -Force $archiveDir | Out-Null
           $archiveName = 'sherpa-onnx-v1.13.8-win-x64-static-MT-Release-lib.tar.bz2'
+          $archivePath = Join-Path $archiveDir $archiveName
+          # 发布页下载入口曾持续返回 504；官方资产 API 可取得有效的下载重定向。
           Invoke-WebRequest `
-            -Uri "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$archiveName`?run=$env:GITHUB_RUN_ID" `
-            -OutFile (Join-Path $archiveDir $archiveName) `
+            -Uri "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets/555521905?run=$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT" `
+            -Headers @{ Accept = 'application/octet-stream' } `
+            -OutFile $archivePath `
             -MaximumRetryCount 3 -RetryIntervalSec 5
+          if ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -ne
+              '56ffcf3c454c1f14f7bc9887286cc8143e7e542dc632804e1c447d5f8d534eaf') {
+            throw 'sherpa-onnx 原生库校验失败'
+          }
           $env:SHERPA_ONNX_ARCHIVE_DIR = $archiveDir
           cargo clean --release -p sherpa-onnx-sys
           cargo build --release -p codex-plus-core --example check_windows_stop_context
