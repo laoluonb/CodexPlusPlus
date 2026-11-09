@@ -213,6 +213,12 @@ jobs:
             Pop-Location
           }
 
+      - name: Verify Windows installer with active background tools
+        shell: powershell
+        run: |
+          $installer = Get-ChildItem dist/windows -Filter '*-setup.exe' | Select-Object -First 1
+          ./scripts/tests/windows-installer-processes.ps1 -InstallerPath $installer.FullName -ExpectedImage dist/windows/app/codex-plus-plus.exe
+
       - name: Upload Windows installer
         # Release（含草稿）已由 prepare 建好，这里只按 tag 上传。
         shell: bash

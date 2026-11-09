@@ -206,6 +206,13 @@ jobs:
             Pop-Location
           }
 
+      - name: Verify Windows installer with active background tools
+        if: github.event_name != 'pull_request'
+        shell: powershell
+        run: |
+          $installer = Get-ChildItem dist/windows -Filter '*-setup.exe' | Select-Object -First 1
+          ./scripts/tests/windows-installer-processes.ps1 -InstallerPath $installer.FullName -ExpectedImage dist/windows/app/codex-plus-plus.exe
+
       - name: Upload Windows binaries
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
