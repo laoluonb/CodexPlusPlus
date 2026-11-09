@@ -50,7 +50,7 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build Windows stop context diagnostic
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name != 'pull_request'
         # 独立 core 示例的依赖组合与桌面程序不同；旧缓存的 build-script 输出
         # 可能指向未随依赖缓存恢复的原生库，单独重新准备这个包即可。
         run: |
@@ -83,7 +83,7 @@ jobs:
           cargo build --release -p codex-plus-core --example check_windows_stop_context
 
       - name: Upload Windows stop context diagnostic
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: windows-stop-context-diagnostic

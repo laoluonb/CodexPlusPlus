@@ -192,7 +192,7 @@ fn windows_installer_waits_for_normal_exit_and_cancels_without_writing_apps() {
     assert!(nsi.contains("IntCmp $2 20 wait_prompt 0 wait_prompt"));
     assert!(nsi.contains("MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION"));
     assert!(nsi.contains("IDRETRY wait_retry IDCANCEL wait_cancel"));
-    assert!(nsi.contains("wait_cancel:\n    Abort"));
+    assert!(nsi.contains("wait_cancel:\n    SetErrorLevel 1\n    Abort"));
     for (name, wait) in [
         ("Install", "Call WaitForProcessExit"),
         ("Uninstall", "Call un.WaitForProcessExit"),
