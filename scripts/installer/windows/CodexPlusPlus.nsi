@@ -1,8 +1,5 @@
 Unicode true
 !include "MUI2.nsh"
-!include "StrFunc.nsh"
-${Using:StrFunc} StrStr
-${Using:StrFunc} UnStrStr
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -35,39 +32,42 @@ Var LegacyDeleteTries
 ; 主程序退出时负责恢复系统浏览器及清理后台服务，安装器不能强制结束进程。
 ; 每 500ms 检查一次；10 秒仍未退出时提示从托盘退出，再重试或取消安装/卸载。
 ; 确认进程退出后再补 500ms 文件锁释放缓冲，避免 File/Delete 撞上残留锁（issue #2362）。
-; 判据用 tasklist 输出 + 字符串包含，不用其退出码（实测 Win11 无匹配仍返回 0），
-; 也不用 cmd 管道 find（PATH 里的 Unix find.exe 会劫持、多层引号易变形）。
-!macro WAIT_FOR_PROCESS_EXIT UNFUNC UNSTR
+; 安装只等待本目录的主界面；独立 MCP 可继续服务当前 Codex。
+; 卸载仍等待所有角色，避免删掉正在使用的工具。
+!macro WAIT_FOR_PROCESS_EXIT UNFUNC BACKGROUND_ARG
   Function ${UNFUNC}
-    Pop $1
+    InitPluginsDir
+    SetOutPath "$PLUGINSDIR"
+    !if "${UNFUNC}" == "WaitForProcessExit"
+      File "check-processes.ps1"
+    !else
+      CopyFiles /SILENT "$INSTDIR\check-processes.ps1" "$PLUGINSDIR\check-processes.ps1"
+    !endif
     StrCpy $2 0
   wait_loop:
-    nsExec::ExecToStack '$SYSDIR\tasklist.exe /FI "IMAGENAME eq $1" /NH'
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\check-processes.ps1" -InstallDir "$INSTDIR" ${BACKGROUND_ARG}'
     Pop $0
     Pop $9
-    !if "${UNSTR}" == ""
-      ${StrStr} $8 "$9" "$1"
-    !else
-      ${UnStrStr} $8 "$9" "$1"
-    !endif
-    StrCmp $8 "" wait_done 0
+    StrCmp $0 "0" wait_done 0
     IntOp $2 $2 + 1
     IntCmp $2 20 wait_prompt 0 wait_prompt
     Sleep 500
     Goto wait_loop
   wait_prompt:
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "请从系统托盘退出 Codex++，等待后台服务清理完成后重试。" IDRETRY wait_retry IDCANCEL wait_cancel
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "无法确认 Codex++ 已退出。请从系统托盘退出 Codex++ 后重试；卸载时还需关闭 Codex，以释放后台工具。" /SD IDCANCEL IDRETRY wait_retry IDCANCEL wait_cancel
   wait_retry:
     StrCpy $2 0
     Goto wait_loop
   wait_cancel:
+    SetErrorLevel 1
     Abort
   wait_done:
     Sleep 500
+    SetOutPath "$INSTDIR"
   FunctionEnd
 !macroend
-!insertmacro WAIT_FOR_PROCESS_EXIT WaitForProcessExit ""
-!insertmacro WAIT_FOR_PROCESS_EXIT un.WaitForProcessExit un.
+!insertmacro WAIT_FOR_PROCESS_EXIT WaitForProcessExit "-AllowBackground"
+!insertmacro WAIT_FOR_PROCESS_EXIT un.WaitForProcessExit ""
 
 Section "Install"
   SetOutPath "$INSTDIR"
@@ -77,9 +77,6 @@ Section "Install"
   ReadRegStr $ExistingInstall HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex++" "InstallLocation"
   existing_install_checked:
 
-  Push "codex-plus-plus.exe"
-  Call WaitForProcessExit
-  Push "codex-plus-plus-manager.exe"
   Call WaitForProcessExit
 
   ; 双程序版本升级时只保留统一应用。旧管理工具可能在本安装器被拉起后
@@ -98,7 +95,24 @@ Section "Install"
     MessageBox MB_OK|MB_ICONSTOP "旧管理工具仍被占用。请退出 Codex++ 后重新安装。"
     Abort
   legacy_binary_removed:
+  ; MCP 与界面共用 exe。已退出界面但 MCP 仍运行时，Windows 允许同目录重命名
+  ; 映像，再写入新版；旧 MCP 继续使用原映像，不强杀当前 Codex 或它的工具。
+  Delete "$INSTDIR\codex-plus-plus.exe"
+  IfFileExists "$INSTDIR\codex-plus-plus.exe" 0 main_binary_ready
+  Delete "$INSTDIR\codex-plus-plus.previous.exe"
+  IfFileExists "$INSTDIR\codex-plus-plus.previous.exe" main_binary_busy 0
+  ClearErrors
+  Rename "$INSTDIR\codex-plus-plus.exe" "$INSTDIR\codex-plus-plus.previous.exe"
+  IfErrors main_binary_busy main_binary_ready
+  main_binary_busy:
+    MessageBox MB_OK|MB_ICONSTOP "旧版 Codex 后台工具仍占用程序文件。请关闭 Codex 后重新安装。" /SD IDOK
+    SetErrorLevel 1
+    Abort
+  main_binary_ready:
   File "${ROOT}\dist\windows\app\codex-plus-plus.exe"
+  File "check-processes.ps1"
+  ; 无运行中的旧 MCP 时可立即移除唯一备份；被占用则保留到下次安装/卸载。
+  Delete "$INSTDIR\codex-plus-plus.previous.exe"
 
   ; 只迁移确实存在的桌面入口，用户删掉的入口在升级时仍不补建（issue #2376）。
   StrCpy $HadDesktopEntry 0
@@ -162,9 +176,6 @@ Section "Install"
 SectionEnd
 
 Section "Uninstall"
-  Push "codex-plus-plus.exe"
-  Call un.WaitForProcessExit
-  Push "codex-plus-plus-manager.exe"
   Call un.WaitForProcessExit
 
   ; 删除主程序前恢复 config.toml：仍指向本机代理 127.0.0.1:57321 时清回官方配置，
@@ -184,7 +195,9 @@ Section "Uninstall"
   RMDir "$SMPROGRAMS\Codex++"
 
   Delete "$INSTDIR\codex-plus-plus.exe"
+  Delete "$INSTDIR\codex-plus-plus.previous.exe"
   Delete "$INSTDIR\codex-plus-plus-manager.exe"
+  Delete "$INSTDIR\check-processes.ps1"
 
   ; NSIS 的 Delete 遇到被占用文件会静默失败，用户会误以为卸载干净。
   ; 残留检测提示用户先从托盘退出，避免“卸载后重装”继续失败（issue #2362）。

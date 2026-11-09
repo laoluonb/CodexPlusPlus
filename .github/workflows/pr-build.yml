@@ -121,6 +121,10 @@ jobs:
         working-directory: apps/codex-plus-manager
         run: npm ci
 
+      - name: Windows installer process regressions
+        shell: powershell
+        run: ./scripts/tests/windows-installer-processes.ps1
+
       - name: Frontend tests
         working-directory: apps/codex-plus-manager
         run: npm test

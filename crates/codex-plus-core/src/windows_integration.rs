@@ -709,7 +709,9 @@ impl VerifiedStopProcess {
             Ok(handle) => handle,
             // ERROR_INVALID_PARAMETER 是不存在的 PID；拒绝把 ACCESS_DENIED 当成退出。
             Err(error) if error.code().0 as u32 == 0x80070057 => return Ok(None),
-            Err(error) => return Err(error).context("无法持有多开进程句柄"),
+            Err(error) => return Err(error).with_context(|| {
+                format!("无法取得进程 {process_id} 的核验权限（需要读取进程内存）")
+            }),
         };
         let handle = unsafe { std::os::windows::io::OwnedHandle::from_raw_handle(native.0) };
         let birth_id = process_birth_id_from_handle(native)
@@ -861,6 +863,72 @@ impl VerifiedStopProcess {
             }
         }
         Ok(())
+    }
+}
+
+/// 只用有限查询权限识别 UAC 权限不一致，在申请内存读取/终止权限之前给出可操作提示。
+/// 不使用提权，也不把同 SID 的不同登录令牌当成同一停止上下文。
+#[cfg(windows)]
+pub(crate) fn check_restart_process_privilege(process_id: u32) -> anyhow::Result<()> {
+    let native = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }
+        .context("无法查询 Codex 进程的权限级别")?;
+    let _guard = HandleGuard(native);
+    let mut token = HANDLE::default();
+    anyhow::ensure!(
+        unsafe { OpenProcessToken(native, 0x0008, &mut token) } != 0,
+        "无法查询 Codex 权限令牌：{}",
+        std::io::Error::last_os_error()
+    );
+    let _token_guard = HandleGuard(token);
+    let mut elevated = 0_u32;
+    let mut returned = 0;
+    anyhow::ensure!(
+        unsafe {
+            GetTokenInformation(
+                token,
+                20,
+                (&mut elevated as *mut u32).cast(),
+                std::mem::size_of::<u32>() as u32,
+                &mut returned,
+            )
+        } != 0
+            && returned as usize == std::mem::size_of::<u32>(),
+        "无法读取 Codex 权限级别"
+    );
+    ensure_restart_privilege_matches(current_process_is_elevated(), elevated != 0)
+}
+
+#[cfg(any(windows, test))]
+fn ensure_restart_privilege_matches(manager_elevated: bool, codex_elevated: bool) -> anyhow::Result<()> {
+    match (manager_elevated, codex_elevated) {
+        (false, true) => anyhow::bail!(
+            "Codex 正以管理员权限运行，当前 Codex++ 为普通权限，Windows 不允许自动重启。请先手动关闭 Codex，再从当前 Codex++ 启动 Codex；当前会话和后台服务已保留"
+        ),
+        (true, false) => anyhow::bail!(
+            "Codex++ 正以管理员权限运行，而 Codex 为普通权限。请从托盘退出 Codex++，取消「以管理员身份运行」后重新打开，再重启 Codex；当前会话和后台服务已保留"
+        ),
+        _ => Ok(()),
+    }
+}
+
+#[cfg(test)]
+mod restart_privilege_tests {
+    #[test]
+    fn windows_main_stop_privilege_mismatch_explains_manual_recovery() {
+        use super::ensure_restart_privilege_matches;
+        assert!(ensure_restart_privilege_matches(false, false).is_ok());
+        assert!(ensure_restart_privilege_matches(true, true).is_ok());
+        let error = ensure_restart_privilege_matches(false, true).unwrap_err().to_string();
+        assert!(error.contains("手动关闭 Codex"));
+        assert!(error.contains("后台服务已保留"));
+        let error = ensure_restart_privilege_matches(true, false).unwrap_err().to_string();
+        assert!(error.contains("取消「以管理员身份运行」"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_main_stop_current_process_privilege_is_queryable() {
+        super::check_restart_process_privilege(std::process::id()).unwrap();
     }
 }
 

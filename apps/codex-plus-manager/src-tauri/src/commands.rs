@@ -3368,7 +3368,7 @@ fn stop_codex_plus_blocking(request: LaunchRequest) -> CommandResult<Value> {
 
 fn stop_failure_message(error: &RestartStopError) -> String {
     match error {
-        RestartStopError::Codex(error) => format!("Codex 进程尚未确认退出：{error}"),
+        RestartStopError::Codex(error) => format!("Codex 进程尚未确认退出：{error:#}"),
         RestartStopError::NativeBrowser(error) => {
             format!("Codex 已停止，但原生浏览器文件尚未恢复：{error}")
         }
@@ -3399,7 +3399,7 @@ enum RestartStopError {
 fn restart_stop_failure_message(error: &RestartStopError) -> String {
     match error {
         RestartStopError::Codex(error) => {
-            format!("Codex 进程尚未确认退出，未清理原生浏览器或启动新实例：{error}")
+            format!("Codex 进程尚未确认退出，未清理原生浏览器或启动新实例：{error:#}")
         }
         RestartStopError::NativeBrowser(error) => {
             let summary = if error

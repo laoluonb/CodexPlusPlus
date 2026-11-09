@@ -147,6 +147,7 @@ fn prepare_stop_context(
         let listener =
             crate::windows_integration::capture_debug_listener(port, expected_executable)?;
         if let Some(listener) = listener.as_ref() {
+            crate::windows_integration::check_restart_process_privilege(listener.process_id)?;
             if context.debug_port_only {
                 context.listener_identity = Some((listener.process_id, listener.birth_id));
             }
