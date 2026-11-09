@@ -628,15 +628,21 @@ fn base_theme_restore_removes_generated_desktop_table() {
 }
 
 #[test]
-fn dream_skin_api_bootstrap_marks_parts_without_rescanning_on_streaming() {
-    use codex_plus_core::assets::injection_script_with_settings;
+fn dream_skin_compatibility_bootstrap_skips_streaming_and_preserves_official_lifecycle() {
+    use codex_plus_core::assets::dream_skin_live_update_script;
 
     let mut settings = BackendSettings::default();
     settings.codex_app_dream_skin_enabled = true;
-    let script = injection_script_with_settings(57321, &settings);
+    let official = dream_skin_live_update_script(&settings, true);
+    assert!(official.contains("codex-dream-skin-selectors/1"));
+    assert!(!official.contains("window.__CODEX_PLUS_DREAM_SKIN_API_OBSERVER__"));
+
+    // 官方引擎自行维护挂载点；其它引擎才使用 Codex++ 的兼容桥接。
+    settings.codex_app_dream_skin_theme_config.style_preset = "codex-snow".into();
+    let script = dream_skin_live_update_script(&settings, true);
     let marker = script
-        .find("data-ds-part")
-        .expect("dream skin bootstrap should mark skin parts");
+        .find("window.__CODEX_PLUS_DREAM_SKIN_API_OBSERVER__")
+        .expect("compatibility bootstrap should install its observer");
     let start = script[..marker]
         .rfind("(() => {")
         .expect("dream skin bootstrap IIFE start");
@@ -647,7 +653,7 @@ fn dream_skin_api_bootstrap_marks_parts_without_rescanning_on_streaming() {
         + "})();".len();
     let bootstrap = &script[start..end];
 
-    assert!(bootstrap.contains("window.__CODEX_PLUS_DREAM_SKIN_API_OBSERVER__"));
+    assert!(bootstrap.contains("data-ds-part"));
     // 回归 issue #2181：流式输出不能触发皮肤挂载点全量重扫。
     // 需要防抖、幂等打标，且纯文本节点增删（流式输出的全部形态）被直接跳过。
     assert!(
