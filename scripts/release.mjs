@@ -64,7 +64,8 @@ if (dirty.length) fail(`有未提交的改动，先提交或还原：\n  ${dirty
 step("工作区干净（CHANGELOG.md 除外）");
 
 // 2. 与远端同步：本地不能落后 origin/main，否则推送会被拒或发出旧代码。
-run("git", ["fetch", "origin", "main", "--tags", "--quiet"]);
+// fork 与上游可能使用同名但不同提交的历史 tag，只同步发版所需的 main。
+run("git", ["fetch", "--no-tags", "origin", "main", "--quiet"]);
 if (!tryRun("git", ["merge-base", "--is-ancestor", "origin/main", "HEAD"]).ok) {
   fail("本地 main 落后于 origin/main，先 git pull --rebase");
 }
