@@ -62,6 +62,14 @@ jobs:
           if (Test-Path -LiteralPath $nativeRoot) {
             Move-Item -LiteralPath $nativeRoot -Destination "$nativeRoot.incomplete-$env:GITHUB_RUN_ID"
           }
+          $archiveDir = Join-Path $env:RUNNER_TEMP "codexpp-native-$env:GITHUB_RUN_ID"
+          New-Item -ItemType Directory -Force $archiveDir | Out-Null
+          $archiveName = 'sherpa-onnx-v1.13.8-win-x64-static-MT-Release-lib.tar.bz2'
+          Invoke-WebRequest `
+            -Uri "https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.8/$archiveName`?run=$env:GITHUB_RUN_ID" `
+            -OutFile (Join-Path $archiveDir $archiveName) `
+            -MaximumRetryCount 3 -RetryIntervalSec 5
+          $env:SHERPA_ONNX_ARCHIVE_DIR = $archiveDir
           cargo clean --release -p sherpa-onnx-sys
           cargo build --release -p codex-plus-core --example check_windows_stop_context
 
@@ -202,6 +210,7 @@ jobs:
           if-no-files-found: error
 
   macos-dmg:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.rust_test_filter }}
     # PR 构建也出通用包，跟发版产物保持一致，避免只在发版时才暴露问题。
     # 没有签名密钥，所以这里走 ad-hoc（脚本的默认行为）。
     name: macOS DMG (universal)
@@ -298,6 +307,7 @@ jobs:
           if-no-files-found: error
 
   linux-deb:
+    if: ${{ github.event_name != 'workflow_dispatch' || !inputs.rust_test_filter }}
     name: Linux DEB (Ubuntu 24.04, amd64)
     runs-on: ubuntu-24.04
     steps:
