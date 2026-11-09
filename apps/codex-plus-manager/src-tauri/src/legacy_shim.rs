@@ -20,7 +20,7 @@ fn main() {
     });
 }
 
-const MAIN_BUNDLE_ID: &str = "com.bigpizzav3.codexplusplus";
+const MAIN_BUNDLE_ID: &str = codex_plus_core::install::APP_BUNDLE_ID;
 const MISPLACED_SHIM_DIALOG: &str = "display dialog \"这是旧版更新器使用的兼容组件，不是 Codex++ 主程序。请把安装包里的「Codex++.app」拖入「应用程序」后再打开。\" buttons {\"好\"} default button 1 with title \"Codex++\"";
 
 /// 返回是否弹出了提示。`run` 执行命令并返回是否成功，便于测试注入。

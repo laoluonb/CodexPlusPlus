@@ -15,7 +15,7 @@ struct BundleSpec {
 
 const BUNDLES: [BundleSpec; 1] = [BundleSpec {
     name: "Codex++.app",
-    id: "com.bigpizzav3.codexplusplus",
+    id: crate::install::APP_BUNDLE_ID,
     executable: "CodexPlusPlus",
 }];
 
@@ -1875,7 +1875,7 @@ mod tests {
         let (_temp, plan, payload) = fixture(true);
         let legacy = BundleSpec {
             name: "Codex++ 管理工具.app",
-            id: "com.bigpizzav3.codexplusplus.manager",
+            id: crate::install::MANAGER_BUNDLE_ID,
             executable: "CodexPlusPlusManager",
         };
         bundle(&plan.install_root, legacy, "1.0.0");
