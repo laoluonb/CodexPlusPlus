@@ -4,7 +4,8 @@
 
 同步 CodexPlusPlus 上游 2.4.0，并保留本 fork 的现有定制。
 
-本次先提供 Windows x64 安装包和便携包；macOS 签名安装包待配置 Apple 证书后补发。
+本次提供 Windows x64 安装包、便携包和 macOS 通用安装包（Intel / Apple Silicon）。
+macOS 安装包使用临时签名（ad-hoc），未经过 Apple 公证；首次打开可能被系统拦截。
 
 - Dream Skin 同步至官方 v1.5.21，更新内置版本与主题包兼容级别，保留官方渲染器和生命周期。
 - 移除「关于」页面的两个社区讨论入口。

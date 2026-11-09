@@ -80,6 +80,15 @@ jobs:
             echo "::warning::CHANGELOG.md 里没有 ${RELEASE_TAG#v} 这一节，改用 GitHub 自动生成的说明"
             gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$RELEASE_TAG" --jq .body > notes.md
           fi
+          if [ "${{ vars.MACOS_ADHOC_RELEASE }}" = "true" ] && [ "$RELEASE_PLATFORMS" = "all" ]; then
+            node <<'NODE'
+          const fs = require("fs");
+          let notes = fs.readFileSync("notes.md", "utf8");
+          notes = notes.replace(/^本次先提供 Windows x64 安装包和便携包；macOS 签名安装包待配置 Apple 证书后补发。\r?\n?/m, "");
+          notes += "\n\nmacOS 通用安装包（Intel / Apple Silicon）使用临时签名（ad-hoc），未经过 Apple 公证；首次打开可能被系统拦截。\n";
+          fs.writeFileSync("notes.md", notes);
+          NODE
+          fi
           cat notes.md
 
       - name: Create or update draft Release
@@ -95,7 +104,7 @@ jobs:
               ;;
             true)
               # 事先手动建好的草稿：推 tag 时以 CHANGELOG 为准刷新说明；补跑时保留手改过的说明。
-              if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+              if [ "$GITHUB_EVENT_NAME" = "push" ] || [ "${{ vars.MACOS_ADHOC_RELEASE }}" = "true" ]; then
                 gh release edit "$RELEASE_TAG" --tag "$RELEASE_TAG" --verify-tag --title "Codex++ $RELEASE_TAG" --notes-file notes.md
               fi
               echo "is_draft=true" >> "$GITHUB_OUTPUT"
@@ -123,6 +132,11 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: windows
 
       - name: Install NSIS
         shell: pwsh
@@ -224,6 +238,7 @@ jobs:
           ref: ${{ env.RELEASE_TAG }}
 
       - name: Import Developer ID certificate
+        if: vars.MACOS_ADHOC_RELEASE != 'true'
         env:
           MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
           MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
@@ -248,6 +263,7 @@ jobs:
           rm -f "$RUNNER_TEMP/cert.p12"
 
       - name: Install Developer ID intermediate certificate
+        if: vars.MACOS_ADHOC_RELEASE != 'true'
         run: |
           set -euo pipefail
           # runner 的系统钥匙串里没有 Developer ID G2 中间证书，
@@ -260,6 +276,7 @@ jobs:
           security find-identity -v -p codesigning
 
       - name: Store notarization credentials
+        if: vars.MACOS_ADHOC_RELEASE != 'true'
         env:
           APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
@@ -288,6 +305,11 @@ jobs:
           # 通用包需要两个架构的 std，构建脚本会各编一遍再 lipo 合并。
           targets: x86_64-apple-darwin,aarch64-apple-darwin
 
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: macos-universal
+
       - name: Install frontend dependencies
         working-directory: apps/codex-plus-manager
         run: npm ci
@@ -300,10 +322,13 @@ jobs:
         env:
           MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
           MACOS_NOTARY_PROFILE: codexplusplus-notary
+          MACOS_ADHOC_RELEASE: ${{ vars.MACOS_ADHOC_RELEASE }}
         run: |
-          # 发版流水线必须真的签名，凭据缺失就直接失败，不要静默退回 ad-hoc
-          # 然后发一个用户打不开的包出去。
-          if [ -z "${MACOS_SIGNING_IDENTITY:-}" ]; then
+          # 只有仓库明确选择临时签名时才允许跳过 Developer ID 与公证。
+          if [ "$MACOS_ADHOC_RELEASE" = "true" ]; then
+            unset MACOS_SIGNING_IDENTITY MACOS_NOTARY_PROFILE
+            echo "::warning::本次 macOS 包使用临时签名，未经过 Apple 公证；Release 说明中已明确标注。"
+          elif [ -z "${MACOS_SIGNING_IDENTITY:-}" ]; then
             echo "error: MACOS_SIGNING_IDENTITY 未配置，拒绝产出未签名的发布包" >&2
             exit 1
           fi
@@ -338,7 +363,7 @@ jobs:
             plutil -lint "$app/Contents/Info.plist" >/dev/null
             codesign -dv "$app" >/dev/null 2>&1
             # 真签名时额外校验签名有效性与 Gatekeeper 判定，防止"签了但无效"混过去。
-            if [ -n "${MACOS_SIGNING_IDENTITY:-}" ]; then
+            if [ "${{ vars.MACOS_ADHOC_RELEASE }}" != "true" ] && [ -n "${MACOS_SIGNING_IDENTITY:-}" ]; then
               codesign --verify --deep --strict "$app"
               spctl --assess --type execute "$app"
             fi
@@ -346,6 +371,7 @@ jobs:
           done
 
       - name: Verify DMG notarization
+        if: vars.MACOS_ADHOC_RELEASE != 'true'
         # 不加 if 条件：Build macOS DMG 已在凭据缺失时直接失败，
         # 能走到这里就必然签名并公证过。此前用 if: env.MACOS_SIGNING_IDENTITY
         # 判断，但该变量只存在于上一步的 env 里，这一步读不到，会永远跳过。
