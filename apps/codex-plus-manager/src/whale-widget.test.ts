@@ -97,6 +97,26 @@ test("complete upstream engine is preserved with verified Codex adapter anchors"
   for (const entry of ["openSoundSettingsPanel", "bubbleModuleWizard", "bubblePickChoiceStep", "confirmAudioCrop", "confirmCrop", "openSnapModal", "openResManager"]) assert.match(full, new RegExp("function " + entry));
 });
 
+test("bubble content fits both dimensions without dropping rows and can grow back after a shorter render", () => {
+  const f = fixture(), runtime = f.create();
+  const properties = new Map<string, string>();
+  const parent: any = {
+    isConnected: true, parentElement: { clientWidth: 410.4 }, clientWidth: 270, clientHeight: 179,
+    style: { getPropertyValue: (key: string) => properties.get(key) || "", setProperty: (key: string, value: string) => properties.set(key, value) },
+    children: [{ offsetWidth: 260, scrollWidth: 310, offsetHeight: 210, scrollHeight: 210, offsetLeft: 5, offsetTop: -15.5 }],
+  };
+  runtime.host.fitBubble(parent);
+  const fit = Number(properties.get("--codex-whale-content-fit"));
+  assert.ok(fit > 0 && fit < 1);
+  assert.ok(180 * fit <= 270 * 0.4 - 1);
+  assert.ok(105 * fit <= 130 * 0.4 - 1);
+  assert.equal(parent.children.length, 1);
+  parent.children[0] = { offsetWidth: 80, scrollWidth: 80, offsetHeight: 30, scrollHeight: 30, offsetLeft: 95, offsetTop: 74.5 };
+  runtime.host.fitBubble(parent);
+  assert.equal(properties.get("--codex-whale-content-fit"), "1");
+  runtime.dispose();
+});
+
 test("repeated scans mount one complete engine; disable frees every native resource", async () => {
   const f = fixture(); f.sync(); await f.settle();
   for (let i = 0; i < 20; i++) f.sync();

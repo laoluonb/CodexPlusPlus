@@ -22,6 +22,11 @@ html input[data-codex-plus-ext="whale-widget"][type="range"]::-webkit-slider-thu
 html input[data-codex-plus-ext="whale-widget"][type="range"]:disabled{opacity:.4!important;cursor:default!important}
 `;
 patch("styleEl.textContent = css", "styleEl.textContent = css + " + JSON.stringify(controlStyles));
+// 内容统一缩放到椭圆安全区；保留原引擎的居中、左右镜像与模块配置。
+patch("transform:translate(-50%,-50%);display:flex;flex-direction:column", "transform:translate(-50%,-50%) scale(var(--codex-whale-content-fit,1));display:flex;flex-direction:column");
+patch(".dshwv-root.dshwv-left .dshwv-text{transform:translate(-50%,-50%) scaleX(-1)}", ".dshwv-root.dshwv-left .dshwv-text{transform:translate(-50%,-50%) scaleX(-1) scale(var(--codex-whale-content-fit,1))}");
+patch("bubbleRowsTo(textBox, mods)", "bubbleRowsTo(textBox, mods)\n    codexWhaleHost.fitBubble(textBox)");
+patch("bubbleRowsTo(tb, mods || [])", "bubbleRowsTo(tb, mods || [])\n    codexWhaleHost.fitBubble(tb)");
 patch("function playPreview(fn) {\n      try { dshwvPreviewOn() }", "function playPreview(fn) {\n      if (soundOn === false) { dshwvToast('声音总开关已关闭，请勾选“声音总开关与按压音效”后试听。'); return }\n      try { dshwvPreviewOn() }");
 patch("sndEntry('按压音效'", "sndEntry('声音总开关与按压音效'");
 patch("ck.checked = !!opts.checked", "ck.checked = !!opts.checked\n    ck.setAttribute('aria-label', labelText)");

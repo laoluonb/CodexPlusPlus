@@ -412,9 +412,9 @@ var css = [
   '.dshwv-pop .dshwv-bshape{transition-delay:.1s}',
   '.dshwv-pop .dshwv-b1{transition-delay:.2s}',
   '.dshwv-pop .dshwv-b2{transition-delay:.3s}',
-  '.dshwv-text{position:absolute;left:var(--dshw-vx,44.25%);top:var(--dshw-vy,36%);width:66%;height:64%;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#536ba9;line-height:1.15;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .16s ease,transform .3s ease}',
+  '.dshwv-text{position:absolute;left:var(--dshw-vx,44.25%);top:var(--dshw-vy,36%);width:66%;height:64%;transform:translate(-50%,-50%) scale(var(--codex-whale-content-fit,1));display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#536ba9;line-height:1.15;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .16s ease,transform .3s ease}',
   '.dshwv-pop.dshwv-pop-open .dshwv-text{opacity:1;transition:opacity .16s ease .36s,transform .3s ease}',
-  '.dshwv-root.dshwv-left .dshwv-text{transform:translate(-50%,-50%) scaleX(-1)}',
+  '.dshwv-root.dshwv-left .dshwv-text{transform:translate(-50%,-50%) scaleX(-1) scale(var(--codex-whale-content-fit,1))}',
   // 大号字体垂直居中修正：flex 容器以 --dshw-vx/--dshw-vy 为整体中心，
   // 内容(任意行数/字号)由 justify-content:center 整体居中，不随字体度量漂移。
   '.dshwv-text .dshwv-trow{flex:0 0 auto;margin:calc(var(--dshw-u) * 2) 0}',
@@ -13834,6 +13834,7 @@ function bubbleRenderModules(mods) {
     amountEl.style.display = 'none'
     hintEl.style.display = 'none'
     bubbleRowsTo(textBox, mods)
+    codexWhaleHost.fitBubble(textBox)
   } catch (err) {}
 }
 // 编辑器真实泡泡预览:用与真实相同的宽度 B 排版(保证换行判定一致),
@@ -13893,6 +13894,7 @@ function bubblePreviewInto(container, mods, widthPx) {
     pop.appendChild(stage)
     container.appendChild(pop)
     bubbleRowsTo(tb, mods || [])
+    codexWhaleHost.fitBubble(tb)
   } catch (err) {}
 }
 // 点击鲸鱼:

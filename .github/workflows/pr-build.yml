@@ -130,6 +130,9 @@ jobs:
         working-directory: apps/codex-plus-manager
         run: npm test
 
+      - name: Whale bubble browser layout regressions
+        run: node scripts/test-whale-bubble-layout.mjs
+
       - name: Native Fast regression tests
         run: >-
           node --test

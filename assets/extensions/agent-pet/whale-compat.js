@@ -29,6 +29,24 @@
     return new Response(bytes, { status: 200, headers: { "Content-Type": match[1] } });
   }
 
+  function codexPlusWhaleFitBubble(parent) {
+    const unit = parent?.parentElement?.clientWidth / 1026;
+    if (!(unit > 0) || !parent.clientWidth || !parent.clientHeight) return;
+    // 主气泡为椭圆。540 × 260u 的居中矩形避开描边和底部尾巴；
+    // 用未变换的布局尺寸测量，缩放不会改变换行，也不会与左右镜像互相覆盖。
+    let halfWidth = 0, halfHeight = 0;
+    for (const child of parent.children) {
+      if (!child.offsetWidth || !child.offsetHeight) continue;
+      const left = child.offsetLeft - parent.clientWidth / 2;
+      const top = child.offsetTop - parent.clientHeight / 2;
+      halfWidth = Math.max(halfWidth, -left, left + Math.max(child.offsetWidth, child.scrollWidth));
+      halfHeight = Math.max(halfHeight, -top, top + Math.max(child.offsetHeight, child.scrollHeight));
+    }
+    const fit = Math.min(1, Math.max(0, 270 * unit - 1) / (halfWidth || 1), Math.max(0, 130 * unit - 1) / (halfHeight || 1));
+    const value = String(Math.floor(fit * 10000) / 10000);
+    if (parent.style.getPropertyValue("--codex-whale-content-fit") !== value) parent.style.setProperty("--codex-whale-content-fit", value);
+  }
+
   function createCodexPlusWhaleFullRuntime(platform) {
     const state = { disposed: false, paused: document.hidden === true, timers: new Map(), rafs: new Map(), observers: new Set(), nodes: new Set(), listeners: [], audio: new Set(), pending: new Set(), media: new Map(), objectUrls: new Set(), subscriptions: [], dispatcher: null, sessionId: "", session: null, sessionAt: 0, sessionPending: null, history: null, historyAt: 0, historyPrices: "", historyPending: null, models: [], relayProfiles: [], turn: null, completed: new Set(), seq: 0, pendingWait: null, completion: null, controls: null, serial: 0 };
     const isolated = Object.create(null);
@@ -387,8 +405,26 @@
     image.prototype = window.Image?.prototype || Object.prototype;
     function audio(url) { const node = mark(new window.Audio()); if (url) node.src = url; return node; }
     audio.prototype = window.Audio?.prototype || Object.prototype;
+    const bubbleParents = new Set();
+    function fitBubbles() {
+      for (const parent of bubbleParents) {
+        if (!parent.isConnected) { bubbleParents.delete(parent); continue; }
+        codexPlusWhaleFitBubble(parent);
+      }
+    }
+    function observeBubbles() {
+      bubbleResize?.disconnect();
+      bubbleMutation?.disconnect();
+      fitBubbles();
+      for (const parent of bubbleParents) {
+        bubbleResize?.observe(parent);
+        for (const child of parent.children) bubbleResize?.observe(child);
+        bubbleMutation?.observe(parent, { childList: true, characterData: true, subtree: true });
+      }
+    }
     const host = {
       active, state, tokens: toTokens,
+      fitBubble(parent) { bubbleParents.add(parent); observeBubbles(); },
       attach(node) { if (active()) state.nodes.add(node); },
       detach(node) { state.nodes.delete(node); },
       initialSound() { return state.startupConfig?.sound !== false; },
@@ -428,11 +464,11 @@
       defaultBubbleItems(items) {
         const copy = JSON.parse(JSON.stringify(items));
         if (copy[0]?.modules) copy[0].modules = [
-          { type: "text", text: "Codex 本机用量", size: 8, bold: true },
-          { type: "today", modelId: "codex", size: 20, rgb: "indigo", tpl: "{tokens_today}" },
-          { type: "today", modelId: "codex", size: 4, color: "#9fb0d9", tpl: "今日 tokens · 近7天 {tokens_week}" },
-          { type: "balance", modelId: "current-provider", size: 3, tpl: "供应商余额 {balance}" },
-          { type: "session", size: 3, tpl: "{session}", len: 20 },
+          { type: "text", text: "Codex 今日 tokens", size: 4, bold: true },
+          { type: "today", modelId: "codex", size: 12, rgb: "indigo", tpl: "{tokens_today}" },
+          { type: "today", modelId: "codex", size: 2, color: "#9fb0d9", tpl: "近7天 {tokens_week}" },
+          { type: "balance", modelId: "current-provider", size: 2, tpl: "供应商余额 {balance}" },
+          { type: "session", size: 2, tpl: "{session}", len: 16 },
         ];
         return copy;
       },
@@ -444,6 +480,8 @@
       },
     };
     const mutation = trackedObserver(window.MutationObserver), resize = trackedObserver(window.ResizeObserver);
+    const bubbleResize = resize ? new resize(fitBubbles) : null;
+    const bubbleMutation = mutation ? new mutation(observeBubbles) : null;
     const environment = [win, doc, fetchCompat, storage, (fn, ms, ...args) => schedule(fn, ms, false, args), clearTimer, (fn, ms, ...args) => schedule(fn, ms, true, args), clearTimer, raf, cancelRaf, mutation, resize, trackedAudioContext, trackedAudioContext, image, audio];
     async function initialize() {
       const configuration = await bridge("/whale/full", { path: "/dsh-whale/size.json", method: "GET", query: {}, body: {} });
@@ -519,6 +557,7 @@
       for (const context of state.audio) { try { void context.close?.().catch?.(() => {}); } catch {} } state.audio.clear();
       for (const node of state.nodes) { if (node.parentNode) node.parentNode.removeChild(node); } state.nodes.clear();
       for (const url of state.objectUrls) URL.revokeObjectURL(url); state.objectUrls.clear(); state.media.clear();
+      bubbleParents.clear();
       state.controls = null;
     }
     listen(document, "visibilitychange", () => pause(document.hidden === true));
