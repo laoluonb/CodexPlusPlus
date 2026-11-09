@@ -870,15 +870,17 @@ impl VerifiedStopProcess {
 /// 不使用提权，也不把同 SID 的不同登录令牌当成同一停止上下文。
 #[cfg(windows)]
 pub(crate) fn check_restart_process_privilege(process_id: u32) -> anyhow::Result<()> {
+    let manager_elevated = current_process_is_elevated();
     let native = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }
         .context("无法查询 Codex 进程的权限级别")?;
     let _guard = HandleGuard(native);
     let mut token = HANDLE::default();
-    anyhow::ensure!(
-        unsafe { OpenProcessToken(native, 0x0008, &mut token) } != 0,
-        "无法查询 Codex 权限令牌：{}",
-        std::io::Error::last_os_error()
-    );
+    if unsafe { OpenProcessToken(native, 0x0008, &mut token) } == 0 {
+        return Err(restart_token_query_error(
+            std::io::Error::last_os_error(),
+            manager_elevated,
+        ));
+    }
     let _token_guard = HandleGuard(token);
     let mut elevated = 0_u32;
     let mut returned = 0;
@@ -895,7 +897,20 @@ pub(crate) fn check_restart_process_privilege(process_id: u32) -> anyhow::Result
             && returned as usize == std::mem::size_of::<u32>(),
         "无法读取 Codex 权限级别"
     );
-    ensure_restart_privilege_matches(current_process_is_elevated(), elevated != 0)
+    ensure_restart_privilege_matches(manager_elevated, elevated != 0)
+}
+
+#[cfg(any(windows, test))]
+fn restart_token_query_error(error: std::io::Error, manager_elevated: bool) -> anyhow::Error {
+    let access_denied = error.raw_os_error() == Some(5);
+    let error = anyhow::Error::new(error);
+    if access_denied && !manager_elevated {
+        error.context(
+            "Windows 拒绝当前普通权限的 Codex++ 查询 Codex 权限信息，Codex 可能正以管理员权限运行。请先手动关闭 Codex，再从普通权限的 Codex++ 启动；当前会话和后台服务已保留",
+        )
+    } else {
+        error.context("无法查询 Codex 权限令牌，未执行停止")
+    }
 }
 
 #[cfg(any(windows, test))]
@@ -929,6 +944,23 @@ mod restart_privilege_tests {
     #[test]
     fn windows_main_stop_current_process_privilege_is_queryable() {
         super::check_restart_process_privilege(std::process::id()).unwrap();
+    }
+
+    #[test]
+    fn windows_main_stop_denied_token_query_keeps_recovery_and_os_error() {
+        let error = super::restart_token_query_error(
+            std::io::Error::from_raw_os_error(5),
+            false,
+        );
+        let message = format!("{error:#}");
+        assert!(message.contains("请先手动关闭 Codex"));
+        assert!(message.contains("后台服务已保留"));
+        assert!(message.contains("os error 5"));
+        let other = super::restart_token_query_error(
+            std::io::Error::from_raw_os_error(6),
+            false,
+        );
+        assert!(!other.to_string().contains("管理员权限"));
     }
 }
 
