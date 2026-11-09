@@ -180,7 +180,9 @@ fn ensure_listener_matches(facts: &ProcessFacts, context: &StopContext) -> Resul
         TargetClassification::Child => "Chromium 子进程",
         TargetClassification::Irrelevant => "应用路径或登录身份",
     };
-    let image = normalized_path(&facts.image)?;
+    let image = normalized_executable_path(&facts.image)?;
+    let user_data = parsed_arguments(&facts.arguments, &image)
+        .and_then(|arguments| effective_user_data(arguments.user_data, &facts.environment));
     let _ = crate::diagnostic_log::append_diagnostic_log(
         "watcher.windows_stop_context_mismatch",
         serde_json::json!({
@@ -194,16 +196,11 @@ fn ensure_listener_matches(facts: &ProcessFacts, context: &StopContext) -> Resul
             "expected_appdata": context.app_data,
             "actual_appdata": facts.environment.app_data,
             "expected_user_data": context.user_data,
-            "actual_user_data": effective_user_data(
-                parsed_arguments(&facts.arguments, &image)?.user_data,
-                &facts.environment,
-            )?,
+            "actual_user_data": user_data.as_ref().ok(),
             "listener_only": context.debug_port_only,
         }),
     );
-    anyhow::bail!(
-        "已接管的 Codex 监听进程核验不一致（{reason}），未结束任何进程"
-    )
+    anyhow::bail!("已接管的 Codex 监听进程核验不一致（{reason}），未结束任何进程")
 }
 
 fn stop_context(
@@ -239,7 +236,7 @@ fn stop_context(
             .transpose()?,
     };
     Ok(StopContext {
-        executable: normalized_path(executable)?,
+        executable: normalized_executable_path(executable)?,
         user_data,
         debug_port_only: extra_args.is_none(),
         listener_identity: None,
@@ -284,7 +281,7 @@ impl HeldMainProcess for crate::windows_integration::VerifiedStopProcess {
     }
 
     fn possible_target(&self, context: &StopContext) -> Result<Option<bool>> {
-        let image = normalized_path(&self.image()?)?;
+        let image = normalized_executable_path(&self.image()?)?;
         if !image_matches(&context.executable, &image) {
             return Ok(Some(false));
         }
@@ -466,7 +463,7 @@ fn candidate_facts<P: HeldMainProcess>(
                     .is_none_or(|(_, birth)| facts.birth == birth),
                 "已接管的 Codex 监听进程创建身份发生变化"
             );
-            let image = normalized_path(&facts.image)?;
+            let image = normalized_executable_path(&facts.image)?;
             if !image_matches(&context.executable, &image) {
                 return Ok(None);
             }
@@ -483,7 +480,7 @@ fn candidate_facts<P: HeldMainProcess>(
 fn reject_skipped_owned_session(facts: &ProcessFacts, context: &StopContext) -> Result<()> {
     if facts.owner == context.owner
         && context.owned_debug_port.is_some()
-        && parsed_arguments(&facts.arguments, &normalized_path(&facts.image)?)?.debug_port
+        && parsed_arguments(&facts.arguments, &normalized_executable_path(&facts.image)?)?.debug_port
             == context.owned_debug_port
     {
         anyhow::bail!("当前后台会话的 Codex 进程与待停止的用户数据上下文不一致，无法确认停止");
@@ -555,7 +552,7 @@ enum TargetClassification {
 
 fn classify_target(facts: &ProcessFacts, context: &StopContext) -> Result<TargetClassification> {
     anyhow::ensure!(facts.birth != 0, "缺少 Codex 进程创建身份");
-    let image = normalized_path(&facts.image)?;
+    let image = normalized_executable_path(&facts.image)?;
     if !image_matches(&context.executable, &image) || facts.owner != context.owner {
         return Ok(TargetClassification::Irrelevant);
     }
@@ -605,7 +602,7 @@ fn parsed_arguments(arguments: &[String], image: &str) -> Result<ParsedArguments
         .first()
         .ok_or_else(|| anyhow::anyhow!("Codex 命令行缺少 argv[0]"))?;
     anyhow::ensure!(
-        normalized_path_text(first)? == image,
+        normalized_executable_path(Path::new(first))? == image,
         "Codex argv[0] 与实际映像不一致"
     );
     parsed_launch_arguments(&arguments[1..])
@@ -667,6 +664,17 @@ fn normalized_path(path: &Path) -> Result<String> {
         path.to_str()
             .ok_or_else(|| anyhow::anyhow!("停止核验路径不是有效 Unicode"))?,
     )
+}
+
+/// QueryFullProcessImageName 返回实际卷路径，而启动参数可能仍使用 WindowsApps 挂载入口。
+/// 仅对可执行文件解析链接；用户数据目录仍按原有的严格目录约定匹配。
+fn normalized_executable_path(path: &Path) -> Result<String> {
+    let normalized = normalized_path(path)?;
+    #[cfg(windows)]
+    if let Ok(resolved) = std::fs::canonicalize(path) {
+        return normalized_path(&resolved);
+    }
+    Ok(normalized)
 }
 
 fn normalized_path_text(path: &str) -> Result<String> {
@@ -815,7 +823,7 @@ mod tests {
 
         fn possible_target(&self, context: &StopContext) -> Result<Option<bool>> {
             let facts = &self.0.facts[0];
-            let image = normalized_path(&facts.image)?;
+            let image = normalized_executable_path(&facts.image)?;
             if !image_matches(&context.executable, &image) {
                 return Ok(Some(false));
             }
@@ -1399,6 +1407,70 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
+    fn mounted_windowsapps_alias_matches_the_real_image_and_argv() {
+        use std::os::windows::process::CommandExt;
+
+        let fixture = tempfile::tempdir().unwrap();
+        let volume = fixture.path().join("volume");
+        let alias = fixture.path().join("mounted-root");
+        let entry = Path::new(
+            r"WindowsApps\OpenAI.Codex_1.2.3.4_x64__publisher\app\ChatGPT.exe",
+        );
+        let actual = volume.join(entry);
+        std::fs::create_dir_all(actual.parent().unwrap()).unwrap();
+        std::fs::write(&actual, b"fixture").unwrap();
+        // 目录联接不需要符号链接权限；模拟 WindowsApps 被迁移到另一卷的安装入口。
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&alias)
+            .arg(&volume)
+            .creation_flags(crate::windows_integration::CREATE_NO_WINDOW)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let mounted = alias.join(entry);
+        assert_ne!(
+            normalized_path(&mounted).unwrap(),
+            normalized_path(&actual).unwrap(),
+        );
+        let mut candidate = facts(&["--remote-debugging-port=52106"]);
+        candidate.image = actual;
+        candidate.arguments[0] = mounted.to_str().unwrap().to_owned();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        for attached in [false, true] {
+            let mut expected = stop_context(
+                &mounted,
+                if attached { None } else { Some(&[]) },
+                candidate.owner.clone(),
+                candidate.environment.clone(),
+                Some(52106),
+            )
+            .unwrap();
+            if attached {
+                expected.listener_identity = Some((1, candidate.birth));
+            }
+            ensure_listener_matches(&candidate, &expected).unwrap();
+            assert_eq!(
+                stop(vec![fake(1, vec![candidate.clone()], &events)], &expected).unwrap(),
+                1,
+            );
+            // 相同文件名的另一入口、其他目录和 agent 隔离实例仍然不能匹配。
+            let mut unrelated = candidate.clone();
+            unrelated.arguments[0] = fixture.path().join("ChatGPT.exe").to_str().unwrap().to_owned();
+            assert!(target_matches(&unrelated, &expected).is_err());
+            let mut isolated = candidate.clone();
+            isolated.environment.agent_run_id = Some("agent".to_owned());
+            assert!(!target_matches(&isolated, &expected).unwrap());
+            if !attached {
+                isolated.environment.agent_run_id = None;
+                isolated.environment.user_data = Some(r"C:\isolated".to_owned());
+                assert!(!target_matches(&isolated, &expected).unwrap());
+            }
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
     fn owned_process_stop_preserves_an_isolated_sibling() {
         use std::os::windows::process::CommandExt;
         use std::process::{Command, Stdio};
@@ -1440,7 +1512,7 @@ mod tests {
             .stop_owner()
             .unwrap();
         let context = StopContext {
-            executable: normalized_path(&executable).unwrap(),
+            executable: normalized_executable_path(&executable).unwrap(),
             user_data: None,
             debug_port_only: false,
             listener_identity: None,
