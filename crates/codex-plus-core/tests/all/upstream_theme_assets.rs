@@ -1,5 +1,18 @@
 use sha2::{Digest, Sha256};
 
+#[test]
+fn dream_skin_package_version_matches_bundled_platform_versions() {
+    for version in [
+        include_str!("../../../../assets/inject/upstream/dream-skin/windows/VERSION"),
+        include_str!("../../../../assets/inject/upstream/dream-skin/macos/VERSION"),
+    ] {
+        assert_eq!(
+            version.trim(),
+            codex_plus_core::dream_skin_package::DREAM_SKIN_PACKAGE_CLIENT_VERSION,
+        );
+    }
+}
+
 fn assert_sha256(relative_path: &str, expected: &str) {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")

@@ -185,7 +185,7 @@ const STEPWISE_SCRIPT: &str = concat!(
     "\n})();\n",
 );
 pub const DIAGNOSTIC_BUILD_ID: &str = "diag-20260518-1";
-const DREAM_SKIN_RENDERER_REVISION: &str = "27-dream-skin-1.5.20-wallpaper-shell";
+const DREAM_SKIN_RENDERER_REVISION: &str = "28-dream-skin-1.5.21-wallpaper-shell";
 
 pub fn renderer_script() -> &'static str {
     RENDERER_SCRIPT

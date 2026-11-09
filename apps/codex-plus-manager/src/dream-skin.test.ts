@@ -238,12 +238,12 @@ describe("dream skin theme helpers", () => {
     assert.match(compatibility, /shellMain\.classList\.add\("main-surface"\)/);
     assert.match(compatibility, /data-codex-plus-dream-skin-main-surface/);
     assert.match(compatibility, /clearDreamSkinMainSurfaceCompatibility\(\)/);
-    assert.match(assets, /DREAM_SKIN_RENDERER_REVISION: &str = "27-dream-skin-1.5.20-wallpaper-shell"/);
+    assert.match(assets, /DREAM_SKIN_RENDERER_REVISION: &str = "28-dream-skin-1.5.21-wallpaper-shell"/);
     assert.match(assets, /DREAM_SKIN_COMMUNITY_COMPAT_CSS/);
     assert.match(assets, /format!\("\{compiled\}\\n\{DREAM_SKIN_COMMUNITY_COMPAT_CSS\}"\)/);
   });
 
-  it("preserves the official 1.5.20 stylesheet and current renderer selectors", async () => {
+  it("preserves the official 1.5.21 stylesheet and current renderer selectors", async () => {
     const renderer = await readFile(
       new URL("../../../assets/inject/upstream/dream-skin/windows/renderer-inject.js", import.meta.url),
       "utf8",

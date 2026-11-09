@@ -11622,15 +11622,9 @@ function AboutScreen({
             </CxRow>
           </CxCard>
         </CxSection>
-        <CxSection title={t("反馈与社区")}>
+        <CxSection title={t("反馈")}>
           <CxCard>
             <CxRow detail={t("在 GitHub Issues 报告问题或提建议")} icon={<Github />} onClick={() => openUrl("https://github.com/laoluonb/CodexPlusPlus/issues")} title={t("反馈问题")}>
-              <ExternalLink aria-hidden="true" className="cx-set-chevron" />
-            </CxRow>
-            <CxRow detail="discord.gg/y96kX7A76v" icon={<MessageCircle />} onClick={() => openUrl("https://github.com/laoluonb/CodexPlusPlus/discussions")} title="Discord">
-              <ExternalLink aria-hidden="true" className="cx-set-chevron" />
-            </CxRow>
-            <CxRow detail="t.me/CodexPlusPlus" icon={<MessageCircle />} onClick={() => openUrl("https://github.com/laoluonb/CodexPlusPlus/discussions")} title="Telegram">
               <ExternalLink aria-hidden="true" className="cx-set-chevron" />
             </CxRow>
           </CxCard>
