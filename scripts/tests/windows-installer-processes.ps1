@@ -52,6 +52,13 @@ $fixture = Start-Process -FilePath $image -ArgumentList '--codex-plus-extension-
 try {
     $facts = Get-CimInstance Win32_Process -Filter "ProcessId=$($fixture.Id)"
     if (-not $facts) { throw 'Fixture process did not start' }
+    $limited = Get-CodexLimitedProcessFacts $fixture.Id
+    if (-not $limited) { throw 'Limited-rights kernel query failed' }
+    Assert-Blocked @($limited) $true $false 'kernel query preserves first-argument MCP role'
+    if ($limited.ExecutablePath -ne $image -or
+        $limited.CommandLine -notlike '* --codex-plus-extension-mcp*') {
+        throw 'Kernel query returned incorrect fixture identity'
+    }
     Assert-Blocked @($facts) $true $false 'live MCP allows upgrade'
     Assert-Blocked @($facts) $false $true 'live MCP blocks uninstall'
     # Exercise the production script's real argument binding and exit code.
