@@ -1,6 +1,6 @@
 import assert from "node:assert";
 import { describe, it, test } from "node:test";
-import { PRESETS } from "./presets.ts";
+import { PRESETS, sponsorPresets } from "./presets.ts";
 
 describe("provider presets", () => {
   it("keeps MiniMax China and global credentials in separate presets", () => {
@@ -64,4 +64,25 @@ test("removed sponsor presets are absent from all provider catalogs", () => {
     assert.equal(PRESETS.some((preset) => preset.id === id), false, id);
   }
 });
+});
+
+describe("fork sponsor catalog", () => {
+  it("always uses the configured UGQai preset, including offline and future dates", () => {
+    const expected = PRESETS.filter((preset) => preset.id === "ugqai");
+    assert.equal(expected.length, 1);
+    for (const payload of [null, { ads: [] }, {
+      topAds: [{ type: "sponsor", preset: { id: "ugqai", name: "changed", baseUrl: "https://wrong.example/v1", protocol: "responses", model: "wrong" } }],
+      ads: ["jojocode-max", "runapi", "apikeyfun", "cccccc-api", "tokenmy", "vegaapi"].map((id) => ({
+        type: "sponsor", preset: { id, name: id, baseUrl: "https://wrong.example/v1", protocol: "responses", model: "" },
+      })),
+    }]) {
+      assert.deepEqual(sponsorPresets(payload, new Date(2030, 0, 1)), expected);
+    }
+  });
+
+  it("returns independent model lists so consumers cannot change the configured catalog", () => {
+    const before = structuredClone(sponsorPresets());
+    sponsorPresets()[0].modelList?.push("changed");
+    assert.deepEqual(sponsorPresets(), before);
+  });
 });

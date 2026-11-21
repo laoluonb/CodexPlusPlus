@@ -48,6 +48,74 @@ test("backend refresh notifies builtins and skips failed heartbeat reads", async
   assert.equal(settingsEvents, 1, "failed reads do not notify builtins (Weixin sync, typing effects…)");
 });
 
+test("heartbeat retries settings revisions after failed or overlapping reads", async () => {
+  const source = fragment("40-backend-settings.js");
+  let revision = "one";
+  let weixinRevision: string | null = null;
+  let weixinHeartbeats = 0;
+  let reads = 0;
+  const pending: Array<(value: boolean) => void> = [];
+  const context = vm.createContext({
+    window: { __codexPlusBackendGeneration: 1 },
+    codexPlusBackendGeneration: 1, codexPlusBackendCheckInFlight: false,
+    codexPlusBackendCheckSeq: 0, codexPlusBackendFailureCount: 0,
+    codexPlusBackendSettingsRevision: "", codexPlusBackendSettingsLoaded: true,
+    codexPlusWeixinSyncRevision: null,
+    codexPlusWeixinSyncHeartbeat: () => { weixinHeartbeats++; },
+    codexPlusBackendSettings: {}, CODEX_PLUS_BACKEND_FAILURE_THRESHOLD: 3,
+    postJson: async () => ({
+      status: "ok", settingsRevision: revision, weixinDesktopSyncRevision: weixinRevision,
+    }),
+    loadBackendSettingsState: () => { reads++; return new Promise<boolean>(resolve => pending.push(resolve)); },
+    syncOfficialUsagePolicy: () => {}, emitCodexPlusSettingsLoaded: () => {},
+    syncCodexPlusBackendToggleButtons: () => {}, renderCodexPlusMenu: () => {},
+    renderBackendStatus: () => {},
+  });
+  vm.runInContext(source.slice(source.indexOf("  let syncBackendSettingsInFlight"),
+    source.indexOf("  async function setBackendSetting(")), context);
+  vm.runInContext(source.slice(source.indexOf("  async function checkBackendStatus()"),
+    source.indexOf("  async function openManagerFromCodex()")), context);
+  const settle = async () => { for (let i = 0; i < 8; i++) await Promise.resolve(); };
+
+  await context.checkBackendStatus();
+  assert.equal(reads, 1);
+  pending.shift()!(false);
+  await settle();
+  await context.checkBackendStatus();
+  assert.equal(reads, 2, "a failed read must retry even when the revision is unchanged");
+
+  revision = "two";
+  await context.checkBackendStatus();
+  assert.equal(reads, 2, "a later heartbeat must not duplicate an in-flight read");
+  pending.shift()!(true);
+  await settle();
+  await context.checkBackendStatus();
+  assert.equal(reads, 3, "a newer revision observed during an in-flight read must be retried");
+  pending.shift()!(true);
+  await settle();
+  await context.checkBackendStatus();
+  assert.equal(reads, 3, "a successfully read revision should not trigger another read");
+  assert.equal(weixinHeartbeats, 1, "unchanged settings still let Weixin retry");
+
+  weixinRevision = "weixin-turn";
+  await context.checkBackendStatus();
+  assert.equal(reads, 4, "a Weixin turn refreshes the snapshot without a settings change");
+  pending.shift()!(true);
+  await settle();
+  await context.checkBackendStatus();
+  assert.equal(reads, 4);
+  assert.equal(weixinHeartbeats, 2);
+
+  revision = "";
+  await context.checkBackendStatus();
+  pending.shift()!(true);
+  await settle();
+  await context.checkBackendStatus();
+  assert.equal(reads, 6, "old backends without a revision retain per-heartbeat reads");
+  pending.shift()!(true);
+  await settle();
+});
+
 test("optimistic backend writes apply to the page before their response arrives", async () => {
   const source = fragment("40-backend-settings.js");
   const applied: unknown[] = [];

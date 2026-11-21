@@ -54,11 +54,17 @@ test("Agent 一行一个始终可见（与设计图一致）；点开 Agent 后�
   assert.match(sidebar, /tone: "direct"/);
   const access = sidebar.slice(sidebar.indexOf("const access ="), sidebar.indexOf("return (", sidebar.indexOf("const access =")));
   assert.doesNotMatch(access, /running/);
-  // 只有 Codex 行有播放 / 停止：命令行 Agent 没有常驻进程可启停。
+  // 只有 Codex 和 Claude 行有播放 / 停止：其它命令行 Agent 没有常驻进程可启停。
   assert.match(sidebar, /\{tool\.id === "codex" && tool\.switchable \? \(\(\) => \{/);
   assert.match(sidebar, /const label = unattached \? t\("重启并挂载"\) : codexRun\.running \? t\("停止 Codex"\) : t\("启动 Codex"\);/);
   assert.match(sidebar, /aria-label=\{label\}/);
   assert.match(sidebar, /onClick=\{unattached \? codexRun\.onRestart : codexRun\.running \? codexRun\.onStop : codexRun\.onStart\}/);
+  // Claude 行同样有播放 / 停止（Claude Desktop 本地模式），视觉与 Codex 行一致。
+  assert.match(sidebar, /\{tool\.id === "claude" \? \(\(\) => \{/);
+  assert.match(sidebar, /const label = claudeRun\.running \? t\("停止本地服务"\) : t\("启动 Claude"\);/);
+  assert.match(sidebar, /onClick=\{claudeRun\.running \? claudeRun\.onStop : claudeRun\.onStart\}/);
+  assert.match(sidebar, /title=\{claudeRun\.busy \? t\("处理中…"\) : claudeRun\.running \? t\("停止本地服务"\) : claudeRun\.unavailableReason \?\? t\("启动 Claude"\)\}/);
+  assert.match(sidebar, /className="cx-side-run"\n\s*data-running=\{claudeRun\.running\}/);
   // 主动停止写 user_stopped，崩溃检测不把它当成意外停止。
   assert.match(text, /const stoppedByUser = result\.latest_launch\?\.phase === "user_stopped";/);
   const lib = readSource("../src-tauri/src/lib.rs");
@@ -124,7 +130,10 @@ test("启动 Codex 一眼可见：Codex 页面顶栏最右侧一个主按钮，�
   const sidebar = functionSource("AppSidebar");
   assert.match(sidebar, /tool\.id === "codex" && tool\.switchable \? "has-run" : ""/);
   assert.match(sidebar, /disabled=\{codexRun\.busy \|\| \(!codexRun\.running && Boolean\(codexRun\.unavailableReason\)\)\}/);
-  assert.match(entry, /codexRun=\{\{ running: codexAppRunning, busy: launchPending, unavailableReason: codexLaunch\.unavailableReason, onStart: codexLaunch\.onLaunch,/);
+  // 侧栏与「Agent 接入」里的 Codex 行共用同一份运行时对象，不再各写一份。
+  assert.match(entry, /const codexRun = \{\n\s*running: codexAppRunning,\n\s*unattached: Boolean\(overview\?\.runtime_health\?\.codex_unattached\),\n\s*busy: launchPending,\n\s*unavailableReason: codexLaunch\.unavailableReason,\n\s*onStart: codexLaunch\.onLaunch,/);
+  assert.match(entry, /codexRun=\{codexRun\}/);
+  assert.match(entry, /<GatewayPage[\s\S]*?codexRun=\{codexRun\}/);
   assert.match(styles, /\.shell \.side-agent-run \{\n(?:  [^\n]*\n)*  width: 24px;\n  height: 24px;/);
   assert.match(styles, /\.shell \.side-agent-run\[data-running="false"\] \{\n  background: hsl\(var\(--status-success\) \/ 0\.14\);\n  color: hsl\(var\(--status-success\)\);/);
   assert.doesNotMatch(styles, /:hover \.side-agent-run|\.side-agent-run \{[^}]*(?:opacity: 0;|visibility: hidden)/);
@@ -265,7 +274,7 @@ test("Skills 与 MCP 同一种行：每个 Skill 一行，右侧每个 Agent 一
   assert.match(extra, /<CxRow className="cx-skill-row"/);
   assert.match(extra, /const agentColumns: McpAgentId\[\] = MCP_AGENTS\.filter\(\(agent\) => agentVisible\(focus, agent\)\);/);
   // 行里每个可见 Agent 一枚开关；分组标题同一列是这一组的批量开关。
-  assert.match(extra, /agentColumns\.map\(\(agent\) => <AgentToggle /);
+  assert.match(extra, /agentColumns\.map\(\(agent\) => \{[\s\S]*?return <AgentToggle /);
   assert.match(extra, /agentColumns\.map\(\(agent\) => <GroupAgentSelect /);
   assert.doesNotMatch(extra, /mg-agent-toggle|mg-skill-group-select/);
   assert.doesNotMatch(css, /\.dark \.mg-skills-page|\.mg-skills-page \.mg-primary|\.mg-skills-page :is\(\.mg-button/);
@@ -300,7 +309,7 @@ test("安装维护并进 Codex 设置：在设置模式的「Codex」分类里�
   assert.match(maintenance, /actions\.clearCodexAppPath\(\)/);
 });
 
-test("页内目录收成单列：增强页的页签横排成胶囊、分组锚点不再显示；设置模式内容限宽", () => {
+test("页内目录收成单列：分组锚点不再显示；增强页不再分页签；设置模式内容限宽", () => {
   for (const page of ["settings-page enhance-page sectioned-page cx-enhance-page", "settings-page codex-settings-page", "weixin-connect-page sectioned-page cx-page"]) {
     assert.ok(text.includes(`className="${page}"`), page);
   }
@@ -308,7 +317,8 @@ test("页内目录收成单列：增强页的页签横排成胶囊、分组锚�
   assert.match(layer, /:root \.shell \.sectioned-page \{\n  display: flex;\n  flex-direction: column;/);
   assert.match(layer, /:root \.shell \.page-section-nav-list \{\n  display: none;/);
   assert.match(layer, /:root \.shell \.screen\[data-settings-mode="true"\] > \* \{\n  width: min\(100%, var\(--cx-content-narrow\)\);/);
-  assert.match(text, /className="enhance-tabs tp-tabs cx-pills" role="tablist"/);
+  // 增强页只剩总开关和独立模式，内置拓展的页签随设置一起搬进 Codex。
+  assert.doesNotMatch(text, /className="enhance-tabs/);
   // 「（实验）」和「需重启」从文字里拿出来做成标题旁的小标签。
   const toggle = functionSource("FeatureToggle");
   assert.match(toggle, /EXPERIMENTAL_TITLE\.test\(title\)/);
@@ -369,7 +379,7 @@ test("Codex 在「经网关」和「直连」之间一键切换：切到网关�
   const app = functionSource("App");
   // 切到网关：和「Agent 接入」开关同一条命令，沿用上次的绑定；池空或模型不在池里时说明原因并带去对应页面。
   assert.match(app, /const draft = draftFromBinding\(previous\);\n\s*const issue = validateDraft\(draft, payload\);/);
-  assert.match(app, /invoke<GatewayResult>\("save_gateway_binding", \{ agent: "codex", binding: \{ \.\.\.bindingFromDraft\(draft, previous\), enabled: true \} \}\)/);
+  assert.match(app, /invoke<GatewayResult>\("save_gateway_binding", \{ agent: "codex", binding: \{ \.\.\.bindingFromDraft\(draft, previous\), enabled: true \}, reconnect: true \}\)/);
   assert.match(app, /onConnect=\{\(\) => void connectCodexGateway\(\)\}/);
   const hint = functionSource("LegacyRelayGatewayHint");
   // 两段式切换在「连接方式」标题右侧；切回直连走 onDisconnect（断开并还原的预览对话框）。
@@ -404,10 +414,11 @@ test("直连供应商和网关供应商池打通：每行标出是否已在池�
   // 提示收在「直连供应商」标题右侧一行，不再单独一张卡。
   assert.match(screen, /<span className="cx-pool-hint"/);
   assert.doesNotMatch(screen, /\{poolBanner\}/);
-  // 接管期间直连供应商整块隐藏，只留「被网关接管」一行说明，没有使用 / 编辑 / 删除。
+  // 接管期间档案可编辑；使用、删除仍不从这个入口执行。
   const takenOver = screen.slice(screen.indexOf("{normalized.relayProfilesEnabled && takenOverByGateway ? ("), screen.indexOf("{normalized.relayProfilesEnabled && !takenOverByGateway ? ("));
   assert.match(takenOver, /title=\{t\("Codex 正由 Codex\+\+ 网关接管"\)\}/);
-  assert.doesNotMatch(takenOver, /directProfiles\.map|onSwitchProfile|onEdit|removeRelayProfile/);
+  assert.match(takenOver, /directProfiles\.map[\s\S]*editRelayProfile\(profile\.id\)/);
+  assert.doesNotMatch(takenOver, /onSwitchProfile|removeRelayProfile/);
   assert.match(functionSource("SortableRelayProfileCard"), /\{gatewayManaged \|\| !poolLink \? null : <PoolLinkControl link=\{poolLink\} profileId=\{profile\.id\} \/>\}/);
 });
 
@@ -418,15 +429,14 @@ test("Codex 被网关接管时隐藏旧版供应商功能；总开关关闭时�
   // 被网关接管时整个「高级」不显示；只有总开关被关掉时才显示，好把它重新打开。
   assert.match(screen, /\{takenOverByGateway && normalized\.relayProfilesEnabled \? null : \(\r?\n\s*<CxSection>[\s\S]*?className="switch-row compact relay-master-switch/);
   assert.match(screen, /onClick=\{\(\) => void saveRelaySettings\(\{ \.\.\.normalized, relayProfilesEnabled: true \}\)\}/);
-  assert.match(screen, /\{takenOverByGateway \? null : \(\r?\n\s+<button className="cx-primary" onClick=\{\(\) => \{ setNewProfileDraft\(null\); setDetailProfileId\(null\); setProviderCatalogOpen\(true\); \}\}/);
+  assert.match(screen, /onClick=\{openCatalog\}[^>]*>[\s\S]*?takenOverByGateway \? t\("添加直连供应商"\)/);
   assert.match(screen, /重新开启只恢复配置写入能力，不会切换直连供应商或断开当前网关/);
   // 导入只写旧版供应商列表、不动 Codex 配置，接管期间也要能从 cc-switch 导入。
   const header = screen.slice(screen.indexOf("<PageHeader"), screen.indexOf("{connection}"));
   assert.doesNotMatch(header, /takenOverByGateway \? null : \(?\s*<div className="third-party-import"/);
   assert.match(header, /<div className="third-party-import" ref=\{thirdPartyImportTriggerRef\}>/);
   assert.doesNotMatch(screen, /disabled=\{takenOverByGateway\}/);
-  // #2801：列表藏起来后给出去处：点「直连」断开后恢复，迁移到供应商池走「添加供应商 → 导入」。
-  assert.match(screen, /点上方「直连」断开网关后恢复；要把它们加进供应商池，去「供应商池」→「添加供应商」→「导入」/);
+  assert.match(screen, /保存后继续使用网关，点上方「直连」预览并确认还原/);
 });
 
 test("多开页可以直接编辑、删除供应商：删除先查占用再二次确认，网关托管项不给入口（#2801）", () => {
@@ -665,4 +675,38 @@ test("供应商详情页不再 absolute 盖住吸顶标题：打开时 .screen �
   assert.match(rule, /position: relative;/);
   assert.match(rule, /inset: auto;/);
   assert.match(rule, /flex: 1 1 auto;/);
+});
+
+test("侧栏 Claude 播放键读 claude_local_status / claude_local_action，不做轮询", () => {
+  const entry = functionSource("App");
+  // App 传进侧栏的是一份轻量状态：running / busy / unavailableReason + 启停回调。
+  assert.match(entry, /claudeRun=\{claudeRun\}/);
+  // 代理活着、或 Claude 还挂在我们的代理端口上（代理已退）都算在跑，按钮才会给「停止」。
+  assert.match(entry, /const claudeAttached = Boolean\(claudeRunStatus\?\.running \|\| claudeRunStatus\?\.localProcess\);/);
+  assert.match(entry, /const claudeRun = \{\n\s*running: claudeAttached,/);
+  assert.match(entry, /unavailableReason: !claudeRunStatus\n\s*\? null/);
+  assert.match(entry, /onStart: \(\) => void claudeLocalRunAction\("launch"\),\n\s*onStop: \(\) => void claudeLocalRunAction\("stop"\),/);
+  // 探测一次就够：读状态要查进程和钥匙串，App 层不轮询。
+  assert.match(entry, /invoke<CommandResult<ClaudeLocalStatus>>\("claude_local_status"\)/);
+  assert.match(entry, /invoke<CommandResult<ClaudeLocalStatus>>\("claude_local_action", \{ action \}\)/);
+  assert.doesNotMatch(
+    entry.slice(entry.indexOf("const refreshClaudeLocalRun"), entry.indexOf("const claudeRunStatus")),
+    /setTimeout|setInterval/,
+  );
+  // Claude 正开着时 launch 会被后端拒绝，前端直接置灰并给原因。
+  assert.match(entry, /Claude 正在运行，请先完全退出，再从 Codex\+\+ 启动/);
+});
+
+test("「Agent 接入」的 Codex 行复用同一份启动状态；Claude 页把新状态回传给 App 的侧栏键", () => {
+  const entry = functionSource("App");
+  // 只穿一层：App → GatewayPage → AgentsView，总览的接入弹窗不传就不显示按钮。
+  assert.match(entry, /<GatewayPage[\s\S]*?codexRun=\{codexRun\}/);
+  const gatewayPage = readSource("./GatewayPage.tsx");
+  assert.match(gatewayPage, /codexRun\?: CodexRunControls/);
+  assert.match(gatewayPage, /<AgentsView busy=\{busy\} codexRun=\{codexRun\}/);
+  // 页面里启动 / 停止后回调把状态交给 App，侧栏按键不用轮询。
+  assert.match(entry, /onLocalStatus=\{\(status\) => \{/);
+  assert.match(entry, /claudeLocalMemo\.status = status;/);
+  assert.match(entry, /setClaudeLocalRun\(\(current\) => \(sameClaudeRunState\(current, status\) \? current : status\)\)/);
+  assert.match(text, /function sameClaudeRunState\(/);
 });

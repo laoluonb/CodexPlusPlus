@@ -21,6 +21,7 @@ Var LegacyDeleteTries
 !define MUI_UNICON "${ROOT}\apps\codex-plus-manager\src-tauri\icons\icon.ico"
 
 !insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryPageLeave
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
@@ -28,6 +29,27 @@ Var LegacyDeleteTries
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "SimpChinese"
 !insertmacro MUI_LANGUAGE "English"
+
+; 安装包的版本资源（#3148）：没有它时文件属性里产品名、版本都是空的，
+; 按产品名放行软件的企业管控会把新版本安装包拦下。
+; VIProductVersion 只收 X.X.X.X：由构建脚本按 VERSION 算好传 VI_VERSION（去掉预发布后缀），
+; 没传（本地手动编译）时用 0.0.0.0，不让版本资源挡住编译。
+!ifndef VI_VERSION
+  !define VI_VERSION "0.0.0.0"
+!endif
+VIProductVersion "${VI_VERSION}"
+VIFileVersion "${VI_VERSION}"
+!macro CODEX_PLUS_VERSION_KEYS LANG
+  VIAddVersionKey /LANG=${LANG} "ProductName" "Codex++"
+  VIAddVersionKey /LANG=${LANG} "FileDescription" "Codex++ Setup"
+  VIAddVersionKey /LANG=${LANG} "CompanyName" "BigPizzaV3"
+  VIAddVersionKey /LANG=${LANG} "LegalCopyright" "Copyright (c) BigPizzaV3"
+  VIAddVersionKey /LANG=${LANG} "ProductVersion" "${VERSION}"
+  VIAddVersionKey /LANG=${LANG} "FileVersion" "${VERSION}"
+  VIAddVersionKey /LANG=${LANG} "OriginalFilename" "CodexPlusPlus-${VERSION}-windows-x64-setup.exe"
+!macroend
+!insertmacro CODEX_PLUS_VERSION_KEYS ${LANG_SIMPCHINESE}
+!insertmacro CODEX_PLUS_VERSION_KEYS ${LANG_ENGLISH}
 
 ; 主程序退出时负责恢复系统浏览器及清理后台服务，安装器不能强制结束进程。
 ; 每次检查后间隔 500ms；20 次仍未退出时提示从托盘退出，再重试或取消安装/卸载。
@@ -68,6 +90,30 @@ Var LegacyDeleteTries
 !macroend
 !insertmacro WAIT_FOR_PROCESS_EXIT WaitForProcessExit "-AllowBackground"
 !insertmacro WAIT_FOR_PROCESS_EXIT un.WaitForProcessExit ""
+
+; 安装目录若被手动改到 Program Files 等系统目录，普通权限写不进
+; codex-plus-plus.exe，安装时报“无权限操作”并要求提权（issue #3061）。
+; 默认目录在用户目录下无需提权；发现是系统目录时先提示，默认回到目录页改选，
+; 而不是装到一半失败。以管理员身份运行、确实要装到系统目录的用户仍可选「是」继续。
+Function DirectoryPageLeave
+  StrLen $3 "$PROGRAMFILES64"
+  StrCpy $4 "$INSTDIR" $3
+  StrCmp "$4" "$PROGRAMFILES64" 0 protected_dir_check_next
+    Call ProtectedDirWarn
+    Goto protected_dir_done
+  protected_dir_check_next:
+  StrLen $3 "$PROGRAMFILES"
+  StrCpy $4 "$INSTDIR" $3
+  StrCmp "$4" "$PROGRAMFILES" 0 protected_dir_done
+    Call ProtectedDirWarn
+  protected_dir_done:
+FunctionEnd
+
+Function ProtectedDirWarn
+  MessageBox MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "所选安装目录位于系统目录（Program Files），普通权限无法替换其中的程序文件，安装时会报“无权限操作”。$\n$\n建议保持默认安装目录（用户目录下，无需管理员权限），或改选其他非系统目录。$\n$\n仍要安装到这里吗？（需要以管理员身份运行安装器）" IDYES protected_dir_confirmed
+    Abort
+  protected_dir_confirmed:
+FunctionEnd
 
 Section "Install"
   SetOutPath "$INSTDIR"

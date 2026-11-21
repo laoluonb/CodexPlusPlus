@@ -4,6 +4,36 @@ use super::*;
 mod actual_attribution_tests;
 
 #[test]
+fn request_evidence_waits_for_in_process_log_trimming() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("request-log.jsonl");
+    fs::write(&path, "").unwrap();
+    let guard = codex_plus_core::request_log::lock_request_log().unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (result_tx, result_rx) = std::sync::mpsc::channel();
+    let read_path = path.clone();
+    let thread = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        let mut cache = RequestEvidenceCache::default();
+        cache.refresh(&read_path);
+        result_tx.send(cache.records).unwrap();
+    });
+    started_rx.recv().unwrap();
+    assert!(matches!(
+        result_rx.recv_timeout(std::time::Duration::from_millis(50)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+    ));
+    fs::write(&path, "{\"id\":\"retained\"}\n").unwrap();
+    drop(guard);
+    let records = result_rx
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].id, "retained");
+    thread.join().unwrap();
+}
+
+#[test]
 fn local_large_json_strings_keep_only_safe_skill_receipts() {
     let dense = format!("[{}0]", "0,".repeat(40_000));
     assert!(dense.len() > tool_receipts::MAX_JSON_TEXT_BYTES);
@@ -912,6 +942,132 @@ fn assert_accounting(snapshot: &Snapshot, count: usize) {
     }
 }
 
+#[test]
+fn model_lengths_are_indexed_and_filtered_by_utf8_bytes() {
+    let mut fixture = Fixture::new();
+    let models = [
+        "a".repeat(200),
+        "b".repeat(201),
+        "c".repeat(256),
+        format!("{}a", "模".repeat(85)),
+    ];
+    let mut rows = Vec::new();
+    for (position, model) in models.iter().enumerate() {
+        let offset = (position as i64 + 1) * 1_000;
+        rows.push(fixture.context(offset, model));
+        rows.push(fixture.usage(offset + 500, position as u64 + 1));
+    }
+    fixture.write_segment("rollout-lengths.jsonl", rows);
+    for phase in ["fresh", "reopened"] {
+        if phase == "reopened" {
+            reopen_index(&mut fixture);
+        }
+        let snapshot = fixture.snapshot();
+        assert_eq!(snapshot.events.len(), models.len(), "{phase}");
+        assert_accounting(&snapshot, models.len());
+        for model in &models {
+            let query = Query::parse(&json!({"model":model}), Local::now().date_naive()).unwrap();
+            let days = snapshot.usage_days(&query, None, None);
+            assert_eq!(days[0]["recordCount"], 1, "{phase} {}", model.len());
+        }
+        assert_eq!(
+            snapshot.session_info[SESSION]["model"], models[3],
+            "{phase}"
+        );
+    }
+    assert!(Query::parse(&json!({"model":"a".repeat(257)}), Local::now().date_naive()).is_none());
+    assert!(
+        Query::parse(
+            &json!({"turnId":"a".repeat(201)}),
+            Local::now().date_naive()
+        )
+        .is_none()
+    );
+    assert!(
+        Query::parse(
+            &json!({"search":"a".repeat(201)}),
+            Local::now().date_naive()
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn oversized_model_blocks_old_context_evidence_and_duplicate_recovery() {
+    let mut fixture = Fixture::new();
+    let oversized = "x".repeat(257);
+    let rows = vec![
+        fixture.context(500, "old-model"),
+        fixture.usage(1_000, 1),
+        fixture.context(1_500, &oversized),
+        fixture.usage(2_000, 2),
+    ];
+    fixture.write_segment("rollout-a.jsonl", rows);
+    let mut duplicate = fixture.usage(2_000, 2);
+    duplicate["payload"]["info"]["total_token_usage"]["reasoning_output_tokens"] = json!(4);
+    fixture.write_segment(
+        "rollout-b.jsonl",
+        vec![fixture.context(500, "old-model"), duplicate],
+    );
+    let mut stale = request();
+    stale.model = "old-model".into();
+    stale.upstream_model = "old-model".into();
+    stale.started_at_ms = fixture.start + 1_800;
+    stale.timestamp_ms = fixture.start + 1_900;
+    fs::write(
+        &fixture.log,
+        format!("{}\n", serde_json::to_string(&stale).unwrap()),
+    )
+    .unwrap();
+    for phase in ["fresh", "reopened"] {
+        if phase == "reopened" {
+            reopen_index(&mut fixture);
+        }
+        let snapshot = fixture.snapshot();
+        assert_accounting(&snapshot, 2);
+        let mut events = snapshot.events.clone();
+        events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        assert_eq!(events[0].model, "old-model", "{phase}");
+        assert!(events[1].model.is_empty(), "{phase}");
+        assert!(events[1].context_conflicts.model, "{phase}");
+        assert_eq!(snapshot.session_info[SESSION]["model"], "", "{phase}");
+    }
+}
+
+#[test]
+fn oversized_context_recovers_on_a_later_continuation() {
+    let mut fixture = Fixture::new();
+    fixture.write_segment(
+        "rollout-a.jsonl",
+        vec![
+            fixture.context(500, "old-model"),
+            fixture.usage(1_000, 1),
+            fixture.context(1_500, &"x".repeat(257)),
+            fixture.usage(2_000, 2),
+        ],
+    );
+    fixture.write_continuation_segment(
+        "rollout-b.jsonl",
+        vec![fixture.context(2_500, "new-model"), fixture.usage(3_000, 3)],
+    );
+    for phase in ["fresh", "reopened"] {
+        if phase == "reopened" {
+            reopen_index(&mut fixture);
+        }
+        let snapshot = fixture.snapshot();
+        assert_accounting(&snapshot, 3);
+        let mut events = snapshot.events.clone();
+        events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        assert_eq!(events[0].model, "old-model", "{phase}");
+        assert!(events[1].model.is_empty(), "{phase}");
+        assert_eq!(events[2].model, "new-model", "{phase}");
+        assert_eq!(
+            snapshot.session_info[SESSION]["model"], "new-model",
+            "{phase}"
+        );
+    }
+}
+
 fn assert_models(snapshot: &Snapshot, expected: &[&str]) {
     assert_eq!(
         snapshot
@@ -1121,6 +1277,7 @@ fn request_routing_restores_legacy_aggregate_proof() {
             at,
             request: proof,
             rejected: false,
+            version: 0,
         },
     );
     let mut events = vec![original];
@@ -1128,6 +1285,339 @@ fn request_routing_restores_legacy_aggregate_proof() {
     assert_eq!(events[0].provider, "supplier-a");
     assert_eq!(events[0].model, "actual-model");
     assert!(!cache.verified[&events[0].id].rejected);
+}
+
+#[test]
+fn cpx_request_proofs_require_the_complete_model_and_preserve_upstream_names() {
+    let mut fixture = Fixture::new();
+    fixture.write_classified_segment("rollout-cpx.jsonl", "cpx-a/model", "custom", "main");
+    let original = fixture.snapshot().events.remove(0);
+    let at = DateTime::parse_from_rfc3339(&original.timestamp)
+        .unwrap()
+        .timestamp_millis();
+    let mut record = request();
+    record.timestamp_ms = at - 10;
+    record.started_at_ms = at - 100;
+    record.model = "cpx-b/model".into();
+    record.upstream_model = "model".into();
+
+    let mut wrong = vec![original.clone()];
+    let mut cache = RequestEvidenceCache::default();
+    cache.records.push(record.clone());
+    cache.attribute(&mut wrong, &mut BTreeMap::new(), &BTreeMap::new());
+    assert!(unknown_provider(&wrong[0].provider));
+    assert_eq!(wrong[0].model, original.model);
+
+    record.model = original.model.clone();
+    record.upstream_model = "cpx-native/model".into();
+    let mut correct = vec![original.clone()];
+    let mut cache = RequestEvidenceCache::default();
+    cache.records.push(record);
+    cache.attribute(&mut correct, &mut BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(correct[0].provider, "supplier-a");
+    assert_eq!(correct[0].model, "cpx-native/model");
+    assert_eq!(correct[0].delta, original.delta);
+    assert_eq!(cache.verified[&original.id].version, 1);
+    cache.records.clear();
+    let mut restored = vec![original.clone()];
+    cache.attribute(&mut restored, &mut BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(restored[0].model, "cpx-native/model");
+}
+
+#[test]
+fn aggregate_original_request_identity_blocks_upstream_only_event_matches() {
+    let mut recovered = Vec::new();
+    for (model, requested) in [
+        ("cpx-a/model", "cpx-b/model"),
+        ("model", "cpx-b/model"),
+        ("cpx-a/model", "other"),
+        ("cpx-a/model", "group/pool"),
+    ] {
+        let mut fixture = Fixture::new();
+        fixture.write_classified_segment("rollout-cpx.jsonl", model, "custom", "main");
+        let original = fixture.snapshot().events.remove(0);
+        let at = DateTime::parse_from_rfc3339(&original.timestamp)
+            .unwrap()
+            .timestamp_millis();
+        let mut record = request();
+        record.timestamp_ms = at - 10;
+        record.started_at_ms = at - 100;
+        record.model = requested.into();
+        record.upstream_model = model.into();
+        let mut cache = RequestEvidenceCache::default();
+        cache.records.push(record.clone());
+        let mut events = vec![original.clone()];
+        let result = cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new());
+        recovered.push(result["recoveredEvents"].as_u64().unwrap());
+        assert_eq!(events[0].id, original.id);
+        assert_eq!(events[0].delta, original.delta);
+        assert_eq!(events[0].model, original.model);
+        assert!(!cache.verified.contains_key(&original.id));
+
+        cache.verified.insert(
+            original.id,
+            VerifiedAttribution {
+                key: RequestMatchKey {
+                    session: SESSION.into(),
+                    model: original.model.clone(),
+                    input: 100,
+                    output: 10,
+                    cached: 20,
+                },
+                at,
+                request: record,
+                rejected: false,
+                version: 1,
+            },
+        );
+        let mut replay = vec![original.clone()];
+        cache.attribute(&mut replay, &mut BTreeMap::new(), &BTreeMap::new());
+        assert!(cache.verified[&original.id].rejected);
+        assert!(unknown_provider(&replay[0].provider));
+    }
+    assert_eq!(recovered, [0, 0, 0, 0]);
+}
+
+#[test]
+fn aggregate_original_request_identity_blocks_upstream_only_live_receipts() {
+    let mut attributed = Vec::new();
+    for model in ["cpx-a/model", "model"] {
+        let mut record = request();
+        record.model = "cpx-b/model".into();
+        record.upstream_model = model.into();
+        let mut row = receipt("cpx-mismatch");
+        row["model"] = json!(model);
+        let result = match_receipts(&[record.clone()], json!([row.clone()]));
+        attributed.push(result[0]["provider"] == "supplier-a");
+
+        row["model"] = json!("cpx-b/model");
+        let proof = match_receipts(&[record.clone()], json!([row.clone()]));
+        assert_eq!(proof[0]["model"], model);
+        for key in ["model", "provider", "requestIds", "requestSignatures"] {
+            row[key] = proof[0][key].clone();
+        }
+        let replay = match_receipts(&[record], json!([row]));
+        assert_eq!(replay[0]["provider"], "supplier-a");
+        assert_eq!(replay[0]["model"], model);
+    }
+    assert_eq!(attributed, [false, false]);
+}
+
+#[test]
+fn aggregate_upstream_identity_cannot_replace_original_live_request() {
+    for requested in ["other", "group/pool"] {
+        let mut record = request();
+        record.model = requested.into();
+        record.upstream_model = "cpx-a/model".into();
+        let mut row = receipt("cpx-mismatch");
+        row["model"] = json!("cpx-a/model");
+        let result = match_receipts(&[record], json!([row]));
+        assert_ne!(result[0]["provider"], "supplier-a", "{requested}");
+    }
+
+    let mut record = request();
+    record.model = "alias/cpx-a/model".into();
+    record.upstream_model = "cpx-a/model".into();
+    let mut row = receipt("cpx-saved");
+    row["model"] = json!(record.model);
+    let proof = match_receipts(&[record.clone()], json!([row.clone()]));
+    assert_eq!(proof[0]["provider"], "supplier-a");
+    assert_eq!(proof[0]["model"], "cpx-a/model");
+    for key in ["model", "provider", "requestIds", "requestSignatures"] {
+        row[key] = proof[0][key].clone();
+    }
+    let replay = match_receipts(&[record], json!([row]));
+    assert_eq!(replay[0]["provider"], "supplier-a");
+    assert_eq!(replay[0]["model"], "cpx-a/model");
+}
+
+#[test]
+fn session_model_supplement_preserves_legacy_display_and_full_name_uniqueness() {
+    let now = Local::now().timestamp_millis();
+    let mut record = request();
+    record.model = "cpx-a/model".into();
+    record.upstream_model = "model".into();
+    record.timestamp_ms = now - 10;
+    record.started_at_ms = now - 100;
+    let mut cache = RequestEvidenceCache::default();
+    cache.records.push(record.clone());
+    let aliases = RequestSessionAliases::new(&BTreeMap::new());
+    let mut sessions = BTreeMap::from([(SESSION.into(), json!({"model":"","role":"main"}))]);
+    cache.supplement_missing_session_models(&mut sessions, &HashSet::new(), &aliases, now);
+    assert_eq!(sessions[SESSION]["model"], "model");
+    assert_eq!(sessions[SESSION]["modelSource"], "request-log-single-model");
+
+    record.id = "request-2".into();
+    record.model = "cpx-b/model".into();
+    cache.records.push(record);
+    let mut sessions = BTreeMap::from([(SESSION.into(), json!({"model":"","role":"main"}))]);
+    cache.supplement_missing_session_models(&mut sessions, &HashSet::new(), &aliases, now);
+    assert_eq!(sessions[SESSION]["model"], "");
+
+    cache.records.truncate(1);
+    cache.records[0].model = "cpx-a/auto".into();
+    let mut sessions = BTreeMap::from([(SESSION.into(), json!({"model":"","role":"main"}))]);
+    cache.supplement_missing_session_models(&mut sessions, &HashSet::new(), &aliases, now);
+    assert_eq!(sessions[SESSION]["model"], "");
+}
+
+#[test]
+fn legacy_proof_with_bare_event_restores_after_reopen() {
+    let mut fixture = Fixture::new();
+    fixture.write_classified_segment("rollout-cpx.jsonl", "model", "custom", "main");
+    let original = fixture.snapshot().events.remove(0);
+    let at = DateTime::parse_from_rfc3339(&original.timestamp)
+        .unwrap()
+        .timestamp_millis();
+    let mut record = request();
+    record.timestamp_ms = at - 10;
+    record.started_at_ms = at - 100;
+    record.model = "cpx-a/model".into();
+    record.upstream_model = "actual".into();
+    let saved = VerifiedAttribution {
+        key: RequestMatchKey {
+            session: SESSION.into(),
+            model: "model".into(),
+            input: 100,
+            output: 10,
+            cached: 20,
+        },
+        at,
+        request: record,
+        rejected: false,
+        version: 0,
+    };
+    let root = tempfile::tempdir().unwrap();
+    let cutoff = Local::now().date_naive() - Days::days(RETENTION_DAYS - 1);
+    let mut disk = provider_cache::ProviderCache::default();
+    disk.open(root.path(), cutoff).unwrap();
+    disk.save(
+        &HashMap::from([(original.id, saved.clone())]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    drop(disk);
+    let mut disk = provider_cache::ProviderCache::default();
+    disk.open(root.path(), cutoff).unwrap();
+    let mut cache = RequestEvidenceCache::default();
+    cache.restore_verified(disk.load_verified(cutoff).unwrap());
+    let mut events = vec![original.clone()];
+    cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(events[0].provider, "supplier-a");
+    assert_eq!(events[0].model, original.model);
+    assert_eq!(events[0].delta, original.delta);
+    assert!(cache.verified[&original.id] == saved);
+}
+
+#[test]
+fn legacy_cpx_request_proof_keeps_its_original_v2_result() {
+    let mut fixture = Fixture::new();
+    fixture.write_classified_segment("rollout-cpx.jsonl", "cpx-a/model", "custom", "main");
+    let original = fixture.snapshot().events.remove(0);
+    let at = DateTime::parse_from_rfc3339(&original.timestamp)
+        .unwrap()
+        .timestamp_millis();
+    let mut record = request();
+    record.timestamp_ms = at - 10;
+    record.started_at_ms = at - 100;
+    record.model = "cpx-b/model".into();
+    record.upstream_model = "cpx-native/actual".into();
+    let saved = VerifiedAttribution {
+        key: RequestMatchKey {
+            session: SESSION.into(),
+            model: "model".into(),
+            input: 100,
+            output: 10,
+            cached: 20,
+        },
+        at,
+        request: record,
+        rejected: false,
+        version: 0,
+    };
+    let mut cache = RequestEvidenceCache::default();
+    let root = tempfile::tempdir().unwrap();
+    let cutoff = Local::now().date_naive() - Days::days(RETENTION_DAYS - 1);
+    let mut disk = provider_cache::ProviderCache::default();
+    disk.open(root.path(), cutoff).unwrap();
+    assert!(
+        serde_json::to_value(&saved)
+            .unwrap()
+            .get("version")
+            .is_none()
+    );
+    disk.save(
+        &HashMap::from([(original.id, saved.clone())]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
+    drop(disk);
+    let mut disk = provider_cache::ProviderCache::default();
+    disk.open(root.path(), cutoff).unwrap();
+    cache.restore_verified(disk.load_verified(cutoff).unwrap());
+    let mut historical = vec![original.clone()];
+    cache.attribute(&mut historical, &mut BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(historical[0].provider, "supplier-a");
+    assert_eq!(historical[0].model, "actual");
+    assert!(cache.verified[&original.id] == saved);
+    assert_eq!(historical[0].delta, original.delta);
+}
+
+#[test]
+fn legacy_cpx_request_proof_does_not_attribute_an_unknown_upstream_model() {
+    let mut fixture = Fixture::new();
+    fixture.write_classified_segment("rollout-cpx.jsonl", "cpx-a/model", "custom", "main");
+    let original = fixture.snapshot().events.remove(0);
+    let at = DateTime::parse_from_rfc3339(&original.timestamp)
+        .unwrap()
+        .timestamp_millis();
+    let mut record = request();
+    record.timestamp_ms = at - 10;
+    record.started_at_ms = at - 100;
+    record.model = "cpx-a/model".into();
+    record.upstream_model = "cpx-native/auto".into();
+    let mut cache = RequestEvidenceCache::default();
+    cache.verified.insert(
+        original.id,
+        VerifiedAttribution {
+            key: RequestMatchKey {
+                session: SESSION.into(),
+                model: "model".into(),
+                input: 100,
+                output: 10,
+                cached: 20,
+            },
+            at,
+            request: record,
+            rejected: false,
+            version: 0,
+        },
+    );
+    let mut events = vec![original];
+    cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new());
+    assert!(unknown_provider(&events[0].provider));
+    assert_eq!(events[0].model, "cpx-a/model");
+}
+
+#[test]
+fn live_cpx_receipts_require_the_full_request_model_and_preserve_legacy_proof() {
+    let mut record = request();
+    record.model = "cpx-b/model".into();
+    record.upstream_model = "cpx-native/model".into();
+    let mut row = receipt("cpx");
+    row["model"] = json!("cpx-a/model");
+    assert_no_attribution(&match_receipts(&[record.clone()], json!([row.clone()])));
+
+    row["model"] = json!("cpx-b/model");
+    let proof = match_receipts(&[record.clone()], json!([row.clone()]));
+    assert_eq!(proof[0]["model"], "cpx-native/model");
+    row["model"] = json!("model");
+    row["provider"] = proof[0]["provider"].clone();
+    row["requestIds"] = proof[0]["requestIds"].clone();
+    row["requestSignatures"] = proof[0]["requestSignatures"].clone();
+    let historical = match_receipts(&[record], json!([row]));
+    assert_eq!(historical[0]["model"], "model");
+    assert_eq!(historical[0]["provider"], "supplier-a");
 }
 
 #[test]
@@ -1161,6 +1651,7 @@ fn port_exact_request_proof_reaches_live_history_after_rotation_and_reopen() {
         ("auto", "model-a", "model-a"),
         ("group/pool", "model-a", "model-a"),
         ("cpx-route/model-a", "model-a", "model-a"),
+        ("supplier-a/model-a", "model-a", "supplier-a/model-a"),
         ("requested-model", "actual-model", "requested-model"),
     ] {
         let mut fixture = Fixture::new();
@@ -2293,6 +2784,314 @@ fn uncertain_counts_do_not_make_another_event_match_a_request_uniquely() {
     let result = cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new());
     assert_eq!(result["recoveredEvents"], 0);
     assert!(unknown_provider(&events[0].provider));
+}
+
+#[test]
+fn uncertain_events_only_block_requests_in_their_competition_window() {
+    let mut fixture = Fixture::new();
+    fixture.write_classified_segment("rollout-a.jsonl", "model-a", "custom", "main");
+    let mut event = fixture.snapshot().events.remove(0);
+    let at = DateTime::parse_from_rfc3339(&event.timestamp)
+        .unwrap()
+        .timestamp_millis();
+    let mut proof = request();
+    proof.started_at_ms = at - 100;
+    proof.timestamp_ms = at - 10;
+    event.provider.clear();
+
+    for lag in [10, 100_000] {
+        proof.timestamp_ms = at - lag;
+        proof.started_at_ms = proof.timestamp_ms - 100;
+        for kind in ["counts", "cache", "context"] {
+            for scope in ["same", "alias", "other"] {
+                for offset in [-120_001, -120_000, 120_000, 120_001] {
+                    let mut uncertain = event.clone();
+                    uncertain.id = [33; 32];
+                    uncertain.timestamp =
+                        DateTime::from_timestamp_millis(proof.timestamp_ms + offset)
+                            .unwrap()
+                            .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+                    uncertain.delta = Tokens::new(20, 0, 2);
+                    match kind {
+                        "counts" => uncertain.count_uncertain = true,
+                        "cache" => uncertain.delta.cached_known = false,
+                        "context" => uncertain.context_conflicts.model = true,
+                        _ => unreachable!(),
+                    }
+                    let mut aliases = BTreeMap::new();
+                    match scope {
+                        "alias" => {
+                            uncertain.session = "alias-child".into();
+                            aliases.insert(uncertain.session.clone(), event.session.clone());
+                        }
+                        "other" => uncertain.session = "another-session".into(),
+                        _ => {}
+                    }
+                    let mut events = vec![event.clone(), uncertain.clone()];
+                    let mut cache = RequestEvidenceCache::default();
+                    cache.records.push(proof.clone());
+                    let result = cache.attribute(&mut events, &mut BTreeMap::new(), &aliases);
+                    let recovered =
+                        scope == "other" || offset.abs() > DELAYED_REQUEST_MATCH_WINDOW_MS;
+                    assert_eq!(
+                        result["recoveredEvents"],
+                        usize::from(recovered),
+                        "{kind}, {scope}, {lag}, {offset}"
+                    );
+                    assert_eq!(
+                        events[0].delta, event.delta,
+                        "{kind}, {scope}, {lag}, {offset}"
+                    );
+                    assert_eq!(
+                        events[1].delta, uncertain.delta,
+                        "{kind}, {scope}, {lag}, {offset}"
+                    );
+                    assert_eq!(
+                        unknown_provider(&events[0].provider),
+                        !recovered,
+                        "{kind}, {scope}, {lag}, {offset}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn request_log_recovers_after_a_distant_uncertain_counter_reset() {
+    for reset_gap in [2_000, 300_000] {
+        let mut fixture = Fixture::new();
+        fixture.start -= 400_000;
+        let mut reset = fixture.usage(2_000, 1);
+        reset["payload"]["info"]["total_token_usage"] = json!({
+            "input_tokens": 5, "cached_input_tokens": 0, "output_tokens": 1
+        });
+        reset["payload"]["info"]["last_token_usage"] = Value::Null;
+        let mut target = fixture.usage(2_000 + reset_gap, 1);
+        target["payload"]["info"]["total_token_usage"] = json!({
+            "input_tokens": 105, "cached_input_tokens": 20, "output_tokens": 11
+        });
+        fixture.write_segment(
+            "rollout-a.jsonl",
+            vec![
+                fixture.context(500, "model-a"),
+                fixture.usage(1_000, 1),
+                reset,
+                target,
+            ],
+        );
+        let before = fixture.snapshot();
+        assert_eq!(before.events.len(), 3);
+        assert!(before.events[1].count_uncertain);
+        assert!(!before.events[2].count_uncertain);
+        assert!(unknown_provider(&before.events[2].provider));
+        let original = before.events[2].clone();
+        let at = DateTime::parse_from_rfc3339(&original.timestamp)
+            .unwrap()
+            .timestamp_millis();
+        let mut proof = request();
+        proof.started_at_ms = at - 100;
+        proof.timestamp_ms = at - 10;
+        fs::write(
+            &fixture.log,
+            format!("{}\n", serde_json::to_string(&proof).unwrap()),
+        )
+        .unwrap();
+        let after = fixture.snapshot();
+        assert_eq!(after.events.len(), before.events.len());
+        for (left, right) in before.events.iter().zip(&after.events) {
+            assert_eq!(left.id, right.id);
+            assert_eq!(left.delta, right.delta);
+            assert_eq!(left.timestamp, right.timestamp);
+        }
+        let recovered = reset_gap > DELAYED_REQUEST_MATCH_WINDOW_MS;
+        assert_eq!(
+            unknown_provider(&after.events[2].provider),
+            !recovered,
+            "reset_gap={reset_gap}"
+        );
+        if recovered {
+            assert_eq!(after.events[2].provider, "supplier-a");
+            reopen_index(&mut fixture);
+            let restored = fixture.snapshot();
+            assert_eq!(restored.events[2].provider, "supplier-a");
+            assert_eq!(restored.events[2].delta, original.delta);
+        }
+    }
+}
+
+#[test]
+fn incomplete_counts_remain_a_session_wide_attribution_gap() {
+    let mut fixture = Fixture::new();
+    fixture.write_classified_segment("rollout-a.jsonl", "model-a", "custom", "main");
+    let mut event = fixture.snapshot().events.remove(0);
+    let at = DateTime::parse_from_rfc3339(&event.timestamp)
+        .unwrap()
+        .timestamp_millis();
+    let mut proof = request();
+    proof.started_at_ms = at - 100;
+    proof.timestamp_ms = at - 10;
+    event.provider.clear();
+    let mut incomplete = event.clone();
+    incomplete.id = [33; 32];
+    incomplete.count_incomplete = true;
+    incomplete.timestamp = DateTime::from_timestamp_millis(at + 600_000)
+        .unwrap()
+        .to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let mut cache = RequestEvidenceCache::default();
+    cache.records.push(proof);
+    let mut events = vec![event, incomplete];
+    let result = cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new());
+    assert_eq!(result["recoveredEvents"], 0);
+    assert!(unknown_provider(&events[0].provider));
+}
+
+#[test]
+fn temporary_uncertain_competition_does_not_reject_saved_attribution() {
+    let mut fixture = Fixture::new();
+    fixture.write_classified_segment("rollout-a.jsonl", "model-a", "custom", "main");
+    let mut event = fixture.snapshot().events.remove(0);
+    let at = DateTime::parse_from_rfc3339(&event.timestamp)
+        .unwrap()
+        .timestamp_millis();
+    let mut proof = request();
+    proof.started_at_ms = at - 100;
+    proof.timestamp_ms = at - 10;
+    event.provider.clear();
+    let mut cache = RequestEvidenceCache::default();
+    cache.records.push(proof);
+    let mut events = vec![event.clone()];
+    assert_eq!(
+        cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+        1
+    );
+    for same_counts in [false, true] {
+        let mut uncertain = event.clone();
+        uncertain.id = [33; 32];
+        uncertain.count_uncertain = true;
+        if !same_counts {
+            uncertain.delta = Tokens::new(20, 0, 2);
+        }
+        events = vec![event.clone(), uncertain];
+        assert_eq!(
+            cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+            0
+        );
+        assert!(!cache.verified[&event.id].rejected);
+        events = vec![event.clone()];
+        assert_eq!(
+            cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+            1
+        );
+    }
+    let mut confirmed_competitor = event.clone();
+    confirmed_competitor.id = [33; 32];
+    events = vec![event.clone(), confirmed_competitor];
+    assert_eq!(
+        cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+        0
+    );
+    assert!(cache.verified[&event.id].rejected);
+    events = vec![event];
+    assert_eq!(
+        cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+        0
+    );
+}
+
+#[test]
+fn uncertain_competition_does_not_hide_a_saved_evidence_conflict() {
+    for conflict in ["event-model", "request-identity"] {
+        let mut fixture = Fixture::new();
+        fixture.write_classified_segment("rollout-a.jsonl", "model-a", "custom", "main");
+        let mut event = fixture.snapshot().events.remove(0);
+        let at = DateTime::parse_from_rfc3339(&event.timestamp)
+            .unwrap()
+            .timestamp_millis();
+        let mut proof = request();
+        proof.started_at_ms = at - 100;
+        proof.timestamp_ms = at - 10;
+        event.provider.clear();
+        let mut cache = RequestEvidenceCache::default();
+        cache.records.push(proof.clone());
+        let mut events = vec![event.clone()];
+        assert_eq!(
+            cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+            1
+        );
+        let mut changed = event.clone();
+        if conflict == "event-model" {
+            changed.model = "model-b".into();
+        } else {
+            let mut conflicting_request = proof.clone();
+            conflicting_request.relay_id = "supplier-b".into();
+            cache.records.push(conflicting_request);
+            let mut other_request = proof.clone();
+            other_request.id = "another-request".into();
+            cache.records.push(other_request);
+        }
+        let mut uncertain = event.clone();
+        uncertain.id = [33; 32];
+        uncertain.count_uncertain = true;
+        uncertain.delta = Tokens::new(20, 0, 2);
+        events = vec![changed, uncertain];
+        assert_eq!(
+            cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+            0,
+            "{conflict}"
+        );
+        assert!(cache.verified[&event.id].rejected, "{conflict}");
+        cache.records = vec![proof];
+        events = vec![event.clone()];
+        assert_eq!(
+            cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+            0,
+            "{conflict}"
+        );
+    }
+}
+
+#[test]
+fn temporary_event_count_gaps_do_not_reject_saved_attribution() {
+    let mut fixture = Fixture::new();
+    fixture.write_classified_segment("rollout-a.jsonl", "model-a", "custom", "main");
+    let mut event = fixture.snapshot().events.remove(0);
+    let at = DateTime::parse_from_rfc3339(&event.timestamp)
+        .unwrap()
+        .timestamp_millis();
+    let mut proof = request();
+    proof.started_at_ms = at - 100;
+    proof.timestamp_ms = at - 10;
+    event.provider.clear();
+    let mut cache = RequestEvidenceCache::default();
+    cache.records.push(proof);
+    let mut events = vec![event.clone()];
+    assert_eq!(
+        cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+        1
+    );
+    for gap in ["uncertain", "incomplete", "cache"] {
+        let mut incomplete = event.clone();
+        match gap {
+            "uncertain" => incomplete.count_uncertain = true,
+            "incomplete" => incomplete.count_incomplete = true,
+            "cache" => incomplete.delta.cached_known = false,
+            _ => unreachable!(),
+        }
+        events = vec![incomplete];
+        assert_eq!(
+            cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+            0,
+            "{gap}"
+        );
+        assert!(!cache.verified[&event.id].rejected, "{gap}");
+        events = vec![event.clone()];
+        assert_eq!(
+            cache.attribute(&mut events, &mut BTreeMap::new(), &BTreeMap::new())["recoveredEvents"],
+            1,
+            "{gap}"
+        );
+    }
 }
 
 #[test]

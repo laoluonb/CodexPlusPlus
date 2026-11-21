@@ -109,7 +109,7 @@ fn managed_responses_defaults_are_independent_of_session_identity() {
                     assert_eq!(model["tool_mode"], "code_mode_only");
                     assert_eq!(model["multi_agent_version"], "v2");
                     assert_eq!(model["context_window"], 272_000);
-                    assert_eq!(model["max_context_window"], 872_000);
+                    assert!(model["max_context_window"].is_null());
                 }
                 assert_auth_and_identity(temp.path(), &profile, identity);
             }
@@ -288,7 +288,7 @@ fn routed_unbundled_models_get_catalogs_for_managed_responses_only() {
 }
 
 #[test]
-fn explicit_windows_keep_upstream_clamp_and_metadata_precedence() {
+fn explicit_windows_allow_runtime_overrides_and_ignore_stale_metadata_clamp() {
     for identity in ["custom", "openai"] {
         let temp = tempfile::tempdir().unwrap();
         let mut profile = profile(RelayMode::PureApi, identity);
@@ -310,7 +310,7 @@ fn explicit_windows_keep_upstream_clamp_and_metadata_precedence() {
             .find(|model| model["slug"] == "gpt-5.6-sol")
             .unwrap();
         assert_eq!(sol["context_window"], 400_000);
-        assert_eq!(sol["max_context_window"], 400_000);
+        assert!(sol["max_context_window"].is_null());
         assert_eq!(sol["multi_agent_version"], "custom-contract");
         assert_eq!(sol["use_responses_lite"], true);
     }
@@ -375,5 +375,41 @@ fn api_to_official_roundtrip_removes_managed_catalog_pointer() {
         let auth: Value =
             serde_json::from_slice(&std::fs::read(temp.path().join("auth.json")).unwrap()).unwrap();
         assert_eq!(auth, serde_json::from_str::<Value>(OFFICIAL_AUTH).unwrap());
+    }
+}
+
+#[test]
+fn unmatched_relay_models_do_not_get_official_only_catalog_fields() {
+    // #3193：未命中官方条目的中转模型（gpt-6.1-sol-relay）回退家族模板时，
+    // 不能把 gpt-6.1-sol 的 tool_mode=code_mode_only 带进生成目录。
+    let _lock = crate::common::global_state_lock();
+    for mode in API_MODES {
+        for (path_name, apply) in APPLY_PATHS {
+            let temp = tempfile::tempdir().unwrap();
+            let mut profile = profile(mode, "custom");
+            profile.model = "gpt-6.1-sol-relay".to_string();
+            // 带窗口后缀才会落受管 catalog（与报告者的配置一致）。
+            profile.model_list = "gpt-6.1-sol-relay[1M],gpt-5.6-sol-relay[1M]".to_string();
+            std::fs::write(temp.path().join("auth.json"), &profile.auth_contents).unwrap();
+            apply(temp.path(), &profile, "").unwrap();
+            let catalog = catalog(temp.path());
+            for slug in ["gpt-6.1-sol-relay", "gpt-5.6-sol-relay"] {
+                let model = catalog["models"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|model| model["slug"] == slug)
+                    .unwrap_or_else(|| panic!("{mode:?}, {path_name}: catalog 缺少 {slug}"));
+                assert!(
+                    model.get("tool_mode").is_none_or(Value::is_null),
+                    "{mode:?}, {path_name}, {slug} 不应带 tool_mode"
+                );
+                assert!(
+                    model.get("prefer_websockets").is_none_or(Value::is_null),
+                    "{mode:?}, {path_name}, {slug} 不应带 prefer_websockets"
+                );
+                assert_eq!(model["use_responses_lite"], false, "{mode:?}, {path_name}, {slug}");
+            }
+        }
     }
 }

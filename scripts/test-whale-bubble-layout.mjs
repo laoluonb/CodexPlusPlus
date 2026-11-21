@@ -20,7 +20,7 @@ await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const base = `http://127.0.0.1:${server.address().port}`;
 const profile = await mkdir(path.join(os.tmpdir(), `codex-whale-layout-${Date.now()}`), { recursive: true });
 const browser = process.env.CODEX_TEST_BROWSER_PATH || "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe";
-const child = spawn(browser, ["--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions", "--disable-background-networking",
+const child = spawn(browser, ["--headless=new", "--do-not-de-elevate", "--disable-gpu", "--no-first-run", "--disable-extensions", "--disable-background-networking",
   `--user-data-dir=${profile}`, "--remote-debugging-port=0", "about:blank"], { stdio: "ignore", windowsHide: true });
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 let socket, cdp;

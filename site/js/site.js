@@ -3,7 +3,7 @@
    - 明暗主题切换（记在 localStorage，读写失败时照常跟随系统）
    - 首屏产品导览页签；「在线体验」页签第一次打开时才加载 iframe
    - 滚动入场、截图大图预览
-   - 最新动态（构建期生成的 releases.json）与赞助商（Ad-List 实时清单 + 快照兜底）
+   - 最新动态（构建期生成的 releases.json）与赞助商（只读远端实时清单）
    没有 JS 时页面内容照常可读：入场动画只在 html.js 下生效。
    ============================================================ */
 
@@ -152,8 +152,5 @@
           : '<p class="rel-empty">更新摘要暂时无法加载，到 <a class="rel-more" href="https://github.com/laoluonb/CodexPlusPlus/releases" target="_blank" rel="noopener">Releases</a> 查看最新版本。</p>';
       });
   })();
-
-  /* ---------------- 赞助商（Ad-List 实时清单 + 构建期快照兜底） ---------------- */
-
 
 })();

@@ -76,15 +76,35 @@ impl Receipt {
     }
 }
 
-fn receipt_model_matches(model: &str, actual: &str, record: &RequestEvidence) -> bool {
-    let normalized = request_base_model(model);
-    normalized == actual
-        || normalized
-            .strip_prefix(&record.relay_id)
-            .and_then(|suffix| suffix.strip_prefix('/'))
-            == Some(actual)
+fn receipt_model_matches(receipt: &Receipt, actual: &str, record: &RequestEvidence) -> bool {
+    let model = receipt.model.as_str();
+    if (codex_plus_core::aggregate_catalog::is_aggregate_model(&record.model)
+        || codex_plus_core::aggregate_catalog::is_aggregate_model(model))
+        && model != record.model
+        && !(receipt.request_ids.contains(&record.id)
+            && receipt
+                .request_signatures
+                .get(&record.id)
+                .is_some_and(|saved| request_signature_matches(saved, record)))
+    {
+        return false;
+    }
+    model == actual
         || (model == record.model
-            && model.split_once('/').map(|(_, suffix)| suffix) == Some(actual))
+            && (codex_plus_core::aggregate_catalog::is_aggregate_model(model)
+                || model.split_once('/').map(|(_, suffix)| suffix) == Some(actual)))
+        || (!codex_plus_core::aggregate_catalog::is_aggregate_model(model)
+            && model
+                .strip_prefix(&record.relay_id)
+                .and_then(|suffix| suffix.strip_prefix('/'))
+                == Some(actual))
+        || (codex_plus_core::aggregate_catalog::is_aggregate_model(actual)
+            && model == request_base_model(actual)
+            && receipt.request_ids.contains(&record.id)
+            && receipt
+                .request_signatures
+                .get(&record.id)
+                .is_some_and(|saved| request_signature_matches(saved, record)))
 }
 
 pub(super) fn match_captured_receipts(
@@ -106,6 +126,12 @@ pub(super) fn match_captured_receipts(
         .collect();
     if receipts.is_empty() {
         return json!([]);
+    }
+    let mut saved_signatures: HashMap<&str, Vec<&str>> = HashMap::new();
+    for receipt in &receipts {
+        for (id, signature) in &receipt.request_signatures {
+            saved_signatures.entry(id).or_default().push(signature);
+        }
     }
     let cutoff = Local::now().date_naive() - Days::days(RETENTION_DAYS - 1);
     let Ok(cache) = provider_cache::ProviderCache::read_snapshot(storage, cutoff) else {
@@ -131,6 +157,7 @@ pub(super) fn match_captured_receipts(
         .iter()
         .map(|row| (row.id.clone(), row.clone()))
         .collect();
+    let mut revalidated_legacy = HashMap::new();
     let mut incomplete_sessions = HashSet::new();
     for (session, receipts) in targets {
         let since = receipts
@@ -183,8 +210,19 @@ pub(super) fn match_captured_receipts(
             }
         }
         for row in captured.into_iter().filter(|row| row.timestamp_ms >= floor) {
-            if observed.get(&row.id) == Some(&row) {
-                continue;
+            if let Some(prior) = observed.get(&row.id) {
+                if prior.same_request(&row) {
+                    if prior.relay_name != row.relay_name {
+                        if let Some(signatures) = saved_signatures.get(row.id.as_str()) {
+                            let legacy = legacy_request_signature(&row);
+                            if signatures.contains(&legacy.as_str()) {
+                                revalidated_legacy
+                                    .insert(row.id.clone(), (legacy, request_signature(&row)));
+                            }
+                        }
+                    }
+                    continue;
+                }
             }
             if combined.len() >= MAX_ROWS_CAPTURED_PROXY {
                 return json!([]);
@@ -201,8 +239,32 @@ pub(super) fn match_captured_receipts(
             row.success = false;
         }
     }
+    // 仅将原始缓存记录能核验的旧签名转换为不含显示名的新签名。
+    let mut normalized_input = None;
+    if !revalidated_legacy.is_empty() {
+        let mut normalized = input.clone();
+        for receipt in normalized.as_array_mut().unwrap() {
+            if let Some(signatures) = receipt
+                .get_mut("requestSignatures")
+                .and_then(Value::as_object_mut)
+            {
+                for (id, signature) in signatures {
+                    if let Some((legacy, current)) = revalidated_legacy.get(id) {
+                        if signature.as_str() == Some(legacy.as_str()) {
+                            *signature = json!(current);
+                        }
+                    }
+                }
+            }
+        }
+        normalized_input = Some(normalized);
+    }
     // 仍由同一匹配器检查签名、计数、完整竞争和双向唯一性。
-    let mut result = match_receipts(&combined, &combined_aliases, input);
+    let mut result = match_receipts(
+        &combined,
+        &combined_aliases,
+        normalized_input.as_ref().unwrap_or(input),
+    );
     let output = result.as_array_mut().unwrap();
     let incomplete: HashSet<_> = receipts
         .iter()
@@ -316,7 +378,7 @@ pub(super) fn match_receipts(
                     || aliases.resolve(&record.thread_id).as_deref() != Some(session.as_str())
                     || record
                         .actual_model()
-                        .is_none_or(|model| !receipt_model_matches(&receipt.model, model, record))
+                        .is_none_or(|model| !receipt_model_matches(receipt, model, record))
                     || (!receipt.provider.is_empty() && receipt.provider != record.relay_id)
                     || !within_receipt_window(
                         record,
@@ -326,7 +388,7 @@ pub(super) fn match_receipts(
                     || receipt
                         .request_signatures
                         .get(id)
-                        .is_some_and(|saved| saved != &request_signature(record))
+                        .is_some_and(|saved| !request_signature_matches(saved, record))
                 {
                     rejected.insert(index);
                 }
@@ -419,7 +481,7 @@ pub(super) fn match_receipts(
                 }
                 model = Some(normalized);
                 provider = Some(&record.relay_id);
-                matching_model &= receipt_model_matches(&receipt.model, normalized, record);
+                matching_model &= receipt_model_matches(receipt, normalized, record);
                 let usage = record.usage.unwrap();
                 let Some(input) = sum.input.checked_add(usage.input_tokens.unwrap()) else {
                     break;
@@ -453,9 +515,7 @@ pub(super) fn match_receipts(
                         continue;
                     }
                     // 已知模型与请求不一致也保留占用，不能把证据转给另一个回执。
-                    if (unknown_model(&receipt.model)
-                        || codex_plus_core::aggregate_catalog::is_aggregate_model(&receipt.model)
-                        || matching_model)
+                    if (unknown_model(&receipt.model) || matching_model)
                         && (unknown_provider(&receipt.provider)
                             || receipt.provider == record.relay_id)
                     {
@@ -505,11 +565,25 @@ pub(super) fn match_receipts(
                 "cached":delta.cached,"rejected":true}));
         } else if count == 1 {
             let record = ids[candidate_ids[0].as_str()];
+            let actual_model = record.actual_model().unwrap();
+            let model = if codex_plus_core::aggregate_catalog::is_aggregate_model(actual_model)
+                && receipt.model == request_base_model(actual_model)
+                && candidate_ids.iter().all(|id| {
+                    receipt.request_ids.contains(id)
+                        && receipt
+                            .request_signatures
+                            .get(id)
+                            .is_some_and(|saved| request_signature_matches(saved, ids[id.as_str()]))
+                }) {
+                receipt.model.as_str()
+            } else {
+                actual_model
+            };
             result.push(json!({
                 "id":receipt.id,"sessionId":receipt.session_id,"timestamp":receipt.timestamp,
                 "input":delta.input,"output":delta.output,"cached":delta.cached,
-                "model":record.actual_model().unwrap(),
-                "provider":record.relay_id,"providerName":record.relay_name,
+                "model":model,
+                "provider":record.relay_id,"providerName":record.provider_name(),
                 "requestIds":candidate_ids,
                 "requestSignatures":candidate_ids.iter().map(|id|
                     (id.clone(),request_signature(ids[id.as_str()]))).collect::<BTreeMap<_,_>>()
@@ -743,11 +817,13 @@ mod completion_lag_tests {
                 &json!([row.clone(), receipt("earlier", 140_000, 10, 2, 3)]),
             );
             assert_eq!(proof.as_array().unwrap().len(), 2);
-            assert!(proof
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|row| row["rejected"] == true));
+            assert!(
+                proof
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .all(|row| row["rejected"] == true)
+            );
         }
         let strict = request("strict", 200_000, -10, 10, 2, 3);
         let mut saved = row;
@@ -780,11 +856,13 @@ mod completion_lag_tests {
             &json!([merged.clone(), receipt("shared", 140_000, 20, 4, 6)]),
         );
         assert_eq!(proof.as_array().unwrap().len(), 2);
-        assert!(proof
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["rejected"] == true));
+        assert!(
+            proof
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|row| row["rejected"] == true)
+        );
         second.timestamp_ms = 199_000;
         let proof = match_receipts(
             &[first.clone(), second.clone()],
@@ -873,7 +951,17 @@ mod completion_lag_tests {
 }
 
 fn request_signature(record: &RequestEvidence) -> String {
-    // 只散列已脱敏的匹配字段，用于日志部分轮转后复核仍存在的单条请求。
-    let digest = Sha256::digest(serde_json::to_vec(record).unwrap_or_default());
+    let mut comparable = record.clone();
+    comparable.relay_name.clear();
+    legacy_request_signature(&comparable)
+}
+
+fn request_signature_matches(saved: &str, record: &RequestEvidence) -> bool {
+    saved == request_signature(record) || saved == legacy_request_signature(record)
+}
+
+fn legacy_request_signature(record: &RequestEvidence) -> String {
+    // 旧回执包含显示名，只能用仍可核对的原始记录验证。
+    let digest = Sha256::digest(serde_json::to_vec(record).expect("serialize request evidence"));
     digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }

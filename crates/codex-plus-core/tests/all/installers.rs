@@ -141,6 +141,28 @@ fn windows_workflows_verify_nsis_and_support_both_program_files_directories() {
 }
 
 #[test]
+fn windows_installer_carries_product_version_resource() {
+    // #3148：按产品名放行的企业管控要求安装包带版本资源。
+    let nsi = std::fs::read_to_string("../../scripts/installer/windows/CodexPlusPlus.nsi").unwrap();
+    let languages = nsi.find("!insertmacro MUI_LANGUAGE \"English\"").unwrap();
+    let product_version = nsi.find("VIProductVersion").unwrap();
+    assert!(languages < product_version, "版本键要在语言加载之后");
+    assert!(nsi.contains("VIProductVersion \"${VI_VERSION}\""), "{nsi}");
+    assert!(nsi.contains("!define VI_VERSION \"0.0.0.0\""), "没传时要有兜底");
+    for workflow in ["pr-build.yml", "release-assets.yml"] {
+        let text =
+            std::fs::read_to_string(format!("../../.github/workflows/{workflow}")).unwrap();
+        assert!(text.contains("\"/DVI_VERSION=$viVersion\""), "{workflow} 要传数字版本");
+    }
+    for key in ["ProductName\" \"Codex++\"", "ProductVersion\" \"${VERSION}\"", "FileVersion\" \"${VERSION}\""] {
+        assert!(nsi.contains(key), "{key}");
+    }
+    for language in ["${LANG_SIMPCHINESE}", "${LANG_ENGLISH}"] {
+        assert!(nsi.contains(&format!("CODEX_PLUS_VERSION_KEYS {language}")), "{language}");
+    }
+}
+
+#[test]
 fn windows_installer_writes_the_same_uninstall_key_as_the_runtime() {
     let nsi = std::fs::read_to_string("../../scripts/installer/windows/CodexPlusPlus.nsi").unwrap();
     assert!(nsi.contains(r"Uninstall\CodexPlusPlus"));
@@ -214,6 +236,19 @@ fn windows_installer_waits_for_normal_exit_and_cancels_without_writing_apps() {
 }
 
 #[test]
+fn windows_installer_ignores_only_scoped_background_tools_and_keeps_one_backup() {
+    let nsi = std::fs::read_to_string("../../scripts/installer/windows/CodexPlusPlus.nsi")
+        .unwrap().replace("\r\n", "\n");
+    assert!(nsi.contains(r#"-File "$PLUGINSDIR\check-processes.ps1" -InstallDir "$INSTDIR" ${BACKGROUND_ARG}"#));
+    assert!(nsi.contains(r#"!insertmacro WAIT_FOR_PROCESS_EXIT WaitForProcessExit "-AllowBackground""#));
+    assert!(nsi.contains(r#"!insertmacro WAIT_FOR_PROCESS_EXIT un.WaitForProcessExit """#));
+    assert!(nsi.contains(r#"Rename "$INSTDIR\codex-plus-plus.exe" "$INSTDIR\codex-plus-plus.previous.exe""#));
+    assert!(nsi.contains("IfFileExists \"$INSTDIR\\codex-plus-plus.previous.exe\" main_binary_busy 0"));
+    assert!(!nsi.contains(".exe.*.old"));
+    assert!(!nsi.contains("taskkill"));
+}
+
+#[test]
 fn windows_uninstaller_restores_proxy_config_before_deleting_main_exe() {
     // issue #406：卸载后 config.toml 仍指向本机代理，官方 Codex 一直 502。
     // 卸载器必须在进程退出后、删除主程序前让主程序清理一次。
@@ -234,6 +269,32 @@ fn windows_uninstaller_restores_proxy_config_before_deleting_main_exe() {
     let delete_exe = section.find(r#"Delete "$INSTDIR\codex-plus-plus.exe""#).unwrap();
     assert!(last_wait < cleanup);
     assert!(cleanup < delete_exe);
+}
+
+#[test]
+fn windows_installer_guards_protected_dirs_and_locked_main_binary() {
+    // issue #3061：装到 Program Files 等系统目录时普通权限写不进 exe，报
+    // “无权限操作”并要求提权。目录页离开时先拦截并提示改目录。
+    let nsi = std::fs::read_to_string("../../scripts/installer/windows/CodexPlusPlus.nsi")
+        .unwrap()
+        .replace("\r\n", "\n");
+    assert!(nsi.contains("!define MUI_PAGE_CUSTOMFUNCTION_LEAVE DirectoryPageLeave"));
+    assert!(nsi.contains("StrCpy $4 \"$INSTDIR\" $3"));
+    assert!(nsi.contains("StrCmp \"$4\" \"$PROGRAMFILES64\" 0 protected_dir_check_next"));
+    assert!(nsi.contains("StrCmp \"$4\" \"$PROGRAMFILES\" 0 protected_dir_done"));
+    assert!(nsi.contains("Call ProtectedDirWarn"));
+    // 以管理员身份运行、确实要装到系统目录的用户仍可确认继续，不能一律拦死。
+    assert!(nsi.contains("MB_YESNO|MB_ICONEXCLAMATION|MB_DEFBUTTON2"));
+    assert!(nsi.contains("IDYES protected_dir_confirmed"));
+
+    // 已占用的后台工具只保留一个映像备份，第二份仍占用时给出明确提示。
+    let install = nsi.split_once("Section \"Install\"").unwrap().1.split_once("SectionEnd").unwrap().0;
+    assert!(install.find(r#"Delete "$INSTDIR\codex-plus-plus.exe""#).unwrap()
+        < install.find(r#"File "${ROOT}\dist\windows\app\codex-plus-plus.exe""#).unwrap());
+    assert!(install.contains("IfErrors main_binary_busy main_binary_ready"));
+    assert!(install.contains("请关闭 Codex 后重新安装。"));
+    assert!(install.contains("main_binary_busy:\n    MessageBox MB_OK|MB_ICONSTOP"));
+
 }
 
 #[test]

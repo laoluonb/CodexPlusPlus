@@ -236,3 +236,16 @@ export const PRESETS: ProviderPreset[] = [
     websiteUrl: "https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/codex",
   },
 ];
+
+/** 推荐清单（ads.json 归一后的 load_ads 结果）里与赞助商预设有关的部分。 */
+export type SponsorAdsPayload = { ads?: unknown[]; topAds?: unknown[] } | null | undefined;
+
+/**
+ * 本 fork 固定使用 UGQai。保留上游调用接口，但远端清单不能替换本地地址、模型或增加赞助商。
+ */
+export function sponsorPresets(_payload?: SponsorAdsPayload, _now: Date = new Date()): ProviderPreset[] {
+  return PRESETS.filter((preset) => preset.id === "ugqai").map((preset) => ({
+    ...preset,
+    ...(preset.modelList ? { modelList: [...preset.modelList] } : {}),
+  }));
+}
