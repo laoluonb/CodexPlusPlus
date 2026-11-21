@@ -12,7 +12,7 @@ import {
   extensionStateForHost,
   type ExtensionHost,
 } from "./extension-host-model.ts";
-import { defaultMarketSort, parseMarketTime, sortMarketScripts } from "./script-market-model.ts";
+import { defaultMarketSort, marketEmptyState, parseMarketTime, sortMarketScripts } from "./script-market-model.ts";
 
 const text = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 const app = ts.createSourceFile("App.tsx", text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -193,7 +193,7 @@ function extensionHarness() {
     // 打开页面时市场还没读过就自动读一次：记下调用，渲染时不执行副作用。
     useEffect: () => undefined,
     agentVisible, extensionEnabledForHost, extensionHostForTool, extensionsForHost, extensionStateForHost,
-    defaultMarketSort, parseMarketTime, sortMarketScripts,
+    defaultMarketSort, marketEmptyState, parseMarketTime, sortMarketScripts,
     formatMarketUpdatedAt: (value: string) => value,
   });
   vm.runInContext(transpile(`const ${declaration("extensionCapabilities").getText(app)};\n${source}`), context);
@@ -345,6 +345,24 @@ test("切换回 Codex 保留原市场和本地列表，包括只声明旧能力�
   nodes = elements(h.render("UserScriptsScreen", { ...props, host: "codex" }));
   assert.ok(nodes.some((node) => node.type === "BuiltinExtensionsSummary"));
   assert.equal(nodes.some((node) => node.type === "CuratedPackagesSection"), false, "返回 Codex 保留原先本地页签");
+});
+
+test("精选市场完成空响应或调用失败后结束加载，并可直接重试", () => {
+  const h = extensionHarness();
+  const props = extensionScreenProps(h, "codex");
+  const section = (overrides: object) => {
+    const nodes = elements(h.render("UserScriptsScreen", { ...props, ...overrides }));
+    return { nodes, empty: nodes.find((node) => node.type === "CuratedPackagesSection")!.props.emptyText };
+  };
+  assert.equal(section({ market: null, marketError: "" }).empty, "正在读取拓展市场…");
+  const empty = section({ market: { status: "ok", market: { scripts: [], packages: [] } }, marketError: "" });
+  assert.equal(empty.empty, "暂无精选拓展，可查看社区或本地拓展。");
+  const failed = section({ market: null, marketError: "connection timed out" });
+  assert.equal(failed.empty, "connection timed out");
+  const retry = failed.nodes.find((node) => node.type === "button" && elementText(node) === "刷新列表");
+  assert.ok(retry);
+  retry.props.onClick();
+  assert.deepEqual(h.calls, [["refreshScriptMarket"]]);
 });
 
 test("总开关读取和写入当前宿主，不复用另一个宿主的设置", () => {

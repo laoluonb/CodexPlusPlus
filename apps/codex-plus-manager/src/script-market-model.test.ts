@@ -1,7 +1,23 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { defaultMarketSort, localScriptState, parseMarketTime, relativeAge, sortMarketScripts } from "./script-market-model.ts";
+import { defaultMarketSort, localScriptState, marketEmptyState, parseMarketTime, relativeAge, sortMarketScripts, withMarketTimeout } from "./script-market-model.ts";
+
+test("market distinguishes loading, an empty successful response, and request failure", () => {
+  assert.equal(marketEmptyState(null, ""), "loading");
+  assert.equal(marketEmptyState({ status: "ok", message: "done" }, ""), "empty");
+  assert.equal(marketEmptyState({ status: "failed", message: "offline" }, ""), "failed");
+  assert.equal(marketEmptyState(null, "timeout"), "failed");
+});
+
+test("market IPC timeout settles a hung request and ignores its late response", async () => {
+  let finish!: (value: string) => void;
+  const hung = new Promise<string>((resolve) => { finish = resolve; });
+  await assert.rejects(withMarketTimeout(hung, "timeout", 10), /timeout/);
+  finish("old response");
+  assert.equal(await withMarketTimeout(Promise.resolve("retry"), "timeout", 100), "retry");
+  await assert.rejects(withMarketTimeout(Promise.reject(new Error("IPC failed")), "timeout", 100), /IPC failed/);
+});
 
 const script = (name: string, updatedAt = "") => ({ name, updatedAt });
 

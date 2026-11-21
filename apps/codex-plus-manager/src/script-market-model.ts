@@ -4,6 +4,24 @@
 /** 市场排序：清单原顺序（维护者编排）、最近更新优先、按名称。 */
 export type ScriptMarketSort = "default" | "updated" | "name";
 
+/** IPC 没有回应时也要结束加载；晚到的结果不会覆盖下一次重试。 */
+export async function withMarketTimeout<T>(request: Promise<T>, message: string, milliseconds = 18_000): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      request,
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error(message)), milliseconds); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export function marketEmptyState(market: { status: string; message: string } | null, error: string): "loading" | "failed" | "empty" {
+  if (error || market?.status === "failed") return "failed";
+  return market ? "empty" : "loading";
+}
+
 type SortableMarketScript = { name: string; updatedAt?: string };
 
 // `YYYY-MM-DD HH:mm[:ss[.sss]]`，后面可跟时区（Z、+08:00、UTC 等）。

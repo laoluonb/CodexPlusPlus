@@ -173,7 +173,7 @@ import { BACKEND_SETTINGS_CHANGED_EVENT, ComputerUsePage } from "./ComputerUsePa
 import { RemoteControlPage, remoteControlRequest } from "./RemoteControlPage";
 import { announceBackendSettingsChanged } from "./settings-events";
 import { PluginMarketScreen } from "./PluginMarketScreen";
-import { defaultMarketSort, parseMarketTime, relativeAge, sortMarketScripts, type LocalScriptState, type ScriptMarketSort } from "./script-market-model";
+import { defaultMarketSort, marketEmptyState, parseMarketTime, relativeAge, sortMarketScripts, withMarketTimeout, type LocalScriptState, type ScriptMarketSort } from "./script-market-model";
 import { extensionEnabledForHost, extensionsForHost, extensionStateForHost, type ExtensionHost } from "./extension-host-model";
 import { ReleaseNotes } from "./ReleaseNotes";
 import { UPDATE_CHECK_INTERVAL_MS, UpdateNotifications, updatePreferencesFrom } from "./update-notification";
@@ -1955,6 +1955,7 @@ export function App() {
   // 供应商池右下角「正在找合适的供应商？」的悬浮提示：点 × 关掉，本次运行内不再出现。
 
   const [scriptMarket, setScriptMarket] = useState<ScriptMarketResult | null>(null);
+  const [scriptMarketError, setScriptMarketError] = useState("");
   const [launchForm, setLaunchForm] = useState({
     appPath: "",
     debugPort: "9229",
@@ -2213,7 +2214,15 @@ export function App() {
   };
 
   const refreshScriptMarket = async (silent = false, preserveRuntime = false) => {
-    const result = await run(() => call<ScriptMarketResult>("refresh_script_market"));
+    setScriptMarketError("");
+    const result = await run(async () => {
+      try {
+        return await withMarketTimeout(call<ScriptMarketResult>("refresh_script_market"), t("拓展市场连接超时，请检查网络后重试。"));
+      } catch (error) {
+        setScriptMarketError(stringifyError(error));
+        throw error;
+      }
+    });
     if (result) {
       setScriptMarket(result);
       setSettings((current) => (current ? {
@@ -5522,7 +5531,7 @@ export function App() {
               actions={actions}
             />
           ) : null}
-          {route === "userScripts" ? <UserScriptsScreen host={extensionHost} focus={agentFocus} onHostChange={setExtensionHost} settings={settings} market={scriptMarket} onOpenBuiltins={() => void navigate("enhance")} onOpenClaude={() => void switchTool("claude", "claude")} actions={actions} /> : null}
+          {route === "userScripts" ? <UserScriptsScreen host={extensionHost} focus={agentFocus} onHostChange={setExtensionHost} settings={settings} market={scriptMarket} marketError={scriptMarketError} onOpenBuiltins={() => void navigate("enhance")} onOpenClaude={() => void switchTool("claude", "claude")} actions={actions} /> : null}
           {route === "pluginMarket" ? <PluginMarketScreen /> : null}
           {route === "home" ? (
             <HomeScreen
@@ -10271,7 +10280,7 @@ function dreamSkinStateLabel(state: "pass" | "warning" | "fail" | "not_running")
   return t("Codex 未运行或不可连接");
 }
 
-function UserScriptsScreen({ host, focus = null, onHostChange, settings, market, onOpenBuiltins, onOpenClaude, actions }: { host: ExtensionHost; focus?: AgentFocus; onHostChange: (host: ExtensionHost) => void; settings: SettingsResult | null; market: ScriptMarketResult | null; onOpenBuiltins: () => void; onOpenClaude: () => void; actions: Actions }) {
+function UserScriptsScreen({ host, focus = null, onHostChange, settings, market, marketError, onOpenBuiltins, onOpenClaude, actions }: { host: ExtensionHost; focus?: AgentFocus; onHostChange: (host: ExtensionHost) => void; settings: SettingsResult | null; market: ScriptMarketResult | null; marketError: string; onOpenBuiltins: () => void; onOpenClaude: () => void; actions: Actions }) {
   const codexHost = host === "codex";
   const [reloading, setReloading] = useState(false);
   const reload = async () => {
@@ -10287,6 +10296,7 @@ function UserScriptsScreen({ host, focus = null, onHostChange, settings, market,
   const scripts = extensionsForHost(inventory?.scripts ?? [], host);
   const marketScripts = market?.market.scripts ?? [];
   const marketPackages = market?.market.packages ?? [];
+  const marketState = marketEmptyState(market, marketError);
   // 参照 Cursor 的 Customize：一个搜索框管所有筛选（精选 / 社区 / 本地 / 我发布的 / dsh 插件），
   // 一排筛选胶囊切换来源，列表按「已安装」「可安装」（本地是「已启用」「未启用」）分节。
   const [search, setSearch] = useState("");
@@ -10423,10 +10433,16 @@ function UserScriptsScreen({ host, focus = null, onHostChange, settings, market,
         </CxBanner>
       ) : null}
       {codexHost ? <CxFilters items={panes} label={t("拓展")} onChange={setPane} trailing={sortControl} value={pane} /> : null}
+      {pane === "market" && (marketState === "failed" || (market && !marketScripts.length && !marketPackages.length)) ? (
+        <div className="community-ext-notice">
+          {marketError ? <span>{marketError} </span> : null}
+          <button className="cx-secondary" onClick={() => void actions.refreshScriptMarket()} type="button">{t("刷新列表")}</button>
+        </div>
+      ) : null}
       {pane === "market" ? (
         <CuratedPackagesSection
           blockedInstalled={market?.market.blockedInstalled ?? []}
-          emptyText={market?.status === "failed" ? market.message : t("正在读取拓展市场…")}
+          emptyText={marketState === "failed" ? (marketError || market?.message || t("拓展市场加载失败，请重试。")) : marketState === "loading" ? t("正在读取拓展市场…") : t("暂无精选拓展，可查看社区或本地拓展。")}
           hasScripts={marketScripts.length > 0}
           installedScripts={sortedMarketScripts.filter((script) => script.installed).map(marketRow)}
           onInstalled={async () => { await actions.reloadUserScripts(); await actions.refreshScriptMarket(false, true); }}

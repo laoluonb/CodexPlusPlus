@@ -1,11 +1,19 @@
 use anyhow::Context;
+use futures_util::{StreamExt, stream::FuturesUnordered};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::user_scripts::UserScriptManager;
 
 pub const DEFAULT_MARKET_INDEX_URL: &str =
-    "https://github.com/laoluonb/CodexPlusPlus/releases/latest/download/script-market.json";
+    "https://raw.githubusercontent.com/BigPizzaV3/CodexPlusPlusScriptMarket/main/index.json";
+const MARKET_INDEX_MIRRORS: &[&str] = &[
+    "https://cdn.jsdelivr.net/gh/BigPizzaV3/CodexPlusPlusScriptMarket@main/index.json",
+    "https://fastly.jsdelivr.net/gh/BigPizzaV3/CodexPlusPlusScriptMarket@main/index.json",
+];
+const MARKET_INDEX_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(12);
+const MARKET_MIRROR_DELAY: std::time::Duration = std::time::Duration::from_millis(700);
+const MARKET_INDEX_MAX_BYTES: usize = 2 * 1024 * 1024;
 
 /// 官方拓展的仓库所有者。精选清单里标了 `official` 的条目，仓库也必须属于这里列出的账号或组织，
 /// 才显示「官方」：清单写错或被误改时，别人的仓库也拿不到官方徽章。
@@ -148,25 +156,62 @@ fn market_http_client(url: &str) -> anyhow::Result<reqwest::Client> {
 }
 
 pub async fn fetch_market_manifest(url: &str) -> anyhow::Result<ScriptMarketManifest> {
+    let mut sources = vec![url];
     if url == DEFAULT_MARKET_INDEX_URL {
-        return Ok(ScriptMarketManifest {
-            version: 1,
-            updated_at: None,
-            scripts: Vec::new(),
-            packages: Vec::new(),
-            blocked: Vec::new(),
+        sources.extend_from_slice(MARKET_INDEX_MIRRORS);
+    }
+    fetch_market_manifest_from_sources(&sources, MARKET_MIRROR_DELAY, MARKET_INDEX_TIMEOUT).await
+}
+
+// 原站先请求；慢连接不拖住整页，稍后并行读取同一公开清单的 CDN 副本。
+// 每个尝试包括 PAC / 系统代理求值、正文读取和解析都有总时限，胜出后取消其它请求。
+async fn fetch_market_manifest_from_sources(
+    sources: &[&str],
+    delay: std::time::Duration,
+    timeout: std::time::Duration,
+) -> anyhow::Result<ScriptMarketManifest> {
+    let mut pending = FuturesUnordered::new();
+    for (index, url) in sources.iter().enumerate() {
+        pending.push(async move {
+            tokio::time::sleep(delay * index as u32).await;
+            tokio::time::timeout(timeout, fetch_market_manifest_source(url))
+                .await
+                .context("拓展市场连接超时，请检查网络后重试")?
         });
     }
-    let raw = market_http_client(url)?
+    let mut errors = Vec::new();
+    while let Some(result) = pending.next().await {
+        match result {
+            Ok(manifest) => return Ok(manifest),
+            Err(error) => errors.push(format!("{error:#}")),
+        }
+    }
+    anyhow::bail!("拓展市场暂时无法连接：{}", errors.join("；"))
+}
+
+async fn fetch_market_manifest_source(url: &str) -> anyhow::Result<ScriptMarketManifest> {
+    let target = url.to_owned();
+    // Windows 的代理自动发现是同步调用，移出异步工作线程，防止它阻塞超时计时器。
+    let client = tokio::task::spawn_blocking(move || market_http_client(&target))
+        .await.context("无法建立拓展市场连接")??;
+    let mut response = client
         .get(url)
         .send()
         .await
         .with_context(|| format!("failed to request script market index {url}"))?
         .error_for_status()
-        .with_context(|| format!("script market index returned an error status {url}"))?
-        .json::<Value>()
-        .await
-        .context("failed to decode script market index JSON")?;
+        .with_context(|| format!("script market index returned an error status {url}"))?;
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.context("failed to read script market index")? {
+        anyhow::ensure!(body.len() + chunk.len() <= MARKET_INDEX_MAX_BYTES, "拓展市场清单过大");
+        body.extend_from_slice(&chunk);
+    }
+    let raw: Value = serde_json::from_slice(&body).context("failed to decode script market index JSON")?;
+    anyhow::ensure!(
+        raw.is_object() && (raw.get("scripts").is_some_and(Value::is_array)
+            || raw.get("packages").is_some_and(Value::is_array)),
+        "拓展市场返回了无效清单"
+    );
     parse_market_manifest(raw)
 }
 
@@ -584,4 +629,52 @@ fn optional_string(raw: &Value, key: &str) -> String {
         .map(str::trim)
         .unwrap_or_default()
         .to_string()
+}
+
+#[cfg(test)]
+mod market_network_tests {
+    use super::*;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::{method, path}};
+
+    #[tokio::test]
+    async fn market_network_slow_origin_does_not_block_mirror() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/slow"))
+            .respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)))
+            .mount(&server).await;
+        Mock::given(method("GET")).and(path("/mirror"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"version": 7, "scripts": []})))
+            .mount(&server).await;
+        let origin = format!("{}/slow", server.uri());
+        let mirror = format!("{}/mirror", server.uri());
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1),
+            fetch_market_manifest_from_sources(&[&origin, &mirror], std::time::Duration::from_millis(20), std::time::Duration::from_secs(3)))
+            .await.unwrap().unwrap();
+        assert_eq!(result.version, 7);
+    }
+
+    #[tokio::test]
+    async fn market_network_invalid_json_shape_does_not_win() {
+        let server = MockServer::start().await;
+        Mock::given(path("/bad")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"error": "unavailable"})))
+            .mount(&server).await;
+        Mock::given(path("/good")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"version": 8, "packages": []})))
+            .mount(&server).await;
+        let bad = format!("{}/bad", server.uri());
+        let good = format!("{}/good", server.uri());
+        let result = fetch_market_manifest_from_sources(&[&bad, &good], std::time::Duration::ZERO, std::time::Duration::from_secs(2))
+            .await.unwrap();
+        assert_eq!(result.version, 8);
+    }
+
+    #[tokio::test]
+    async fn market_network_all_slow_sources_time_out() {
+        let server = MockServer::start().await;
+        Mock::given(path("/slow")).respond_with(ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(2)))
+            .mount(&server).await;
+        let source = format!("{}/slow", server.uri());
+        let error = fetch_market_manifest_from_sources(&[&source], std::time::Duration::ZERO, std::time::Duration::from_millis(100))
+            .await.unwrap_err();
+        assert!(format!("{error:#}").contains("超时"));
+    }
 }
