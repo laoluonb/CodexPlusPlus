@@ -4,6 +4,10 @@ type CommandResult = {
   [key: string]: unknown;
 };
 
+export function isTauri(): boolean {
+  return false;
+}
+
 const ok = <T extends Record<string, unknown>>(payload: T = {} as T): CommandResult & T => ({
   status: "ok",
   message: "演示模式",
@@ -17,6 +21,8 @@ const previewEnglish = (() => {
 const L = (zh: string, en: string) => (previewEnglish ? en : zh);
 
 const demoSettings = {
+  codexHomePath: "",
+  workspacesPath: "",
   claudeAppExtensions: false,
   revision: "web-preview",
   codexAppPath: "/Applications/Codex.app",
